@@ -9369,6 +9369,8 @@ function openTerminalModal(agentName) {
     cursorBlink: false,
     disableStdin: false,
     scrollback: 500,
+    convertEol: true,
+    allowProposedApi: true,
   })
   const fitAddon = new window.FitAddon.FitAddon()
   term.loadAddon(fitAddon)
@@ -9385,7 +9387,11 @@ function openTerminalModal(agentName) {
   sse.onmessage = (e) => {
     try {
       const msg = JSON.parse(e.data)
-      if (msg.pane !== undefined) term.write('\x1b[2J\x1b[H' + msg.pane)
+      if (msg.pane !== undefined) {
+        // Strip OSC-8 hyperlinks (not supported by xterm, cause visual noise)
+        const clean = msg.pane.replace(/\x1b]8;[^\x1b]*\x1b\\/g, '')
+        term.write('\x1b[2J\x1b[H' + clean)
+      }
     } catch {}
   }
   sse.onerror = () => term.write('\r\n[stream hiba vagy leállva]\r\n')
