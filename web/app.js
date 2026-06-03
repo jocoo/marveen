@@ -9380,6 +9380,7 @@ function openTerminalModal(agentName) {
   terminalFit = fitAddon
 
   openModal(overlay)
+  setTimeout(() => term.focus(), 50)
 
   // SSE pane stream
   const token = localStorage.getItem('marveen-dashboard-token') || ''
