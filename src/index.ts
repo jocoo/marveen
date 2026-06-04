@@ -1,3 +1,6 @@
+// Install IPv4-only fetch dispatcher first -- before any module that issues
+// outbound HTTP. See ./network-ipv4.ts for rationale.
+import './network-ipv4.js'
 import {
   readFileSync,
   unlinkSync,
