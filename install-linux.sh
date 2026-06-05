@@ -35,12 +35,14 @@ offer_claude_fallback() {
     read -p "  Megnyissam Claude Code-ot a hiba diagnosztizalasahoz? (i/n) [n]: " OPEN_CLAUDE
     OPEN_CLAUDE=${OPEN_CLAUDE:-n}
     if [ "$OPEN_CLAUDE" = "i" ]; then
-      claude --prompt "$prompt"
+      # `claude` az inicialis promptot pozicionalis argumentumkent veszi.
+      # A regi `--prompt` flag mar nem letezik (unknown option '--prompt').
+      claude "$prompt"
       return
     fi
   fi
   echo -e "  ${DIM}Futtasd manualisan:${NC}"
-  echo -e "  ${DIM}claude --prompt \"$(echo "$prompt" | sed 's/"/\\"/g')\"${NC}"
+  echo -e "  ${DIM}claude \"$(echo "$prompt" | sed 's/"/\\"/g')\"${NC}"
 }
 
 fail() {
@@ -205,6 +207,33 @@ ok "pipx" $(pipx --version)
 ok "python3 $(python3 --version | awk '{print $2}')"
 ok "tmux $(tmux -V | awk '{print $2}')"
 ok "unzip" $(unzip -v | awk 'NR==1 {print $2}')
+
+# ─────────────────────────────────────────────
+# Repo bootstrap
+# ─────────────────────────────────────────────
+# Ha a scriptet onmagaban toltottek le (curl|bash, `bash install-linux.sh`
+# a home-bol, vagy a Windows/WSL wrapper /tmp-be menti), akkor a repo NINCS
+# a gepen -> a kesobbi `npm install`, template-masolas es dist build mind egy
+# package.json nelkuli mappaban futna (ENOENT: /root/package.json). Ilyenkor
+# klonozzuk a repot egy stabil helyre es ujrafuttatjuk magunkat onnan.
+# git itt mar garantaltan telepitve van (lasd fentebb a [1/7] lepest).
+if [ ! -f "$INSTALL_DIR/package.json" ]; then
+  warn "A telepito a repon kivulrol fut (nincs package.json itt: $INSTALL_DIR)."
+  TARGET_DIR="$HOME/marveen"
+  if [ -f "$TARGET_DIR/package.json" ]; then
+    ok "Meglevo checkout: $TARGET_DIR -- frissites..."
+    git -C "$TARGET_DIR" pull --ff-only 2>/dev/null || warn "git pull kihagyva (helyi valtozasok lehetnek)."
+  else
+    echo -e "  Repo klonozasa -> ${TARGET_DIR} ..."
+    # A repo default branch-e a develop, de a publikus telepito main-rol fut
+    # (a Windows/WSL wrapper is main-rol fetcheli a scriptet) -> pineljuk a main-t.
+    git clone --depth 1 --branch main https://github.com/Szotasz/marveen.git "$TARGET_DIR" \
+      || fail "git clone sikertelen: https://github.com/Szotasz/marveen.git (main branch)"
+    ok "Repo klonozva: $TARGET_DIR"
+  fi
+  echo -e "  Telepito ujrainditasa a checkoutbol..."
+  exec bash "$TARGET_DIR/install-linux.sh"
+fi
 
 INSTALL_STEP="claude-bun-install"
 # ─────────────────────────────────────────────
