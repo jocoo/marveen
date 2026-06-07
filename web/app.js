@@ -1009,11 +1009,8 @@ const agentModel = document.getElementById('agentModel')
 const toast = document.getElementById('toast')
 
 const AVATARS = [
-  '01_robot.png', '02_wizard_girl.png', '03_knight.png', '04_ninja.png',
-  '05_pirate.png', '06_scientist_girl.png', '07_astronaut.png', '08_viking.png',
-  '09_cowgirl.png', '10_detective.png', '11_chef.png', '12_witch.png',
-  '13_samurai.png', '14_fairy_girl.png', '15_firefighter.png', '16_punk_girl.png',
-  '17_explorer.png', '18_dj.png', '19_princess.png', '20_alien.png'
+  'Kuzco.png', 'Pacha.png', 'Chicha.png', 'Chaca.png', 'Tipo.png',
+  'Kronk.png', 'Yzma.png', 'Mata.png', 'Rudy.png'
 ]
 
 let selectedAvatar = null
@@ -7822,9 +7819,17 @@ async function loadUpdates() {
       summary.className = 'updates-summary error'
       summary.innerHTML = `<strong>Nem sikerült ellenőrizni:</strong> ${escapeHtmlUpdates(data.error)}<br>Jelenlegi: <code>${cur}</code>`
       applyBtn.hidden = true
-    } else if (data.behind === 0) {
+    } else if (data.behind === 0 && !data.localAhead) {
       summary.className = 'updates-summary up-to-date'
       summary.innerHTML = `<strong>A legfrissebb verzión vagy</strong> (<code>${cur}</code>). Nincs teendő.`
+      applyBtn.hidden = true
+    } else if (data.localAhead && data.localAhead > 0) {
+      const base = (data.baseSha || '').slice(0, 7)
+      const aheadPart = data.behind > 0
+        ? `<strong>${data.behind} új commit elérhető</strong> a <code>${escapeHtmlUpdates(data.remote)}</code> repón`
+        : `<strong>Nincs új upstream commit</strong>`
+      summary.className = 'updates-summary diverged'
+      summary.innerHTML = `${aheadPart}, és ${data.localAhead} saját lokális commit a tetején.<br>Jelenlegi: <code>${cur}</code> → Közös ős: <code>${base}</code> → Legfrissebb: <code>${lat}</code><br><small>Az automatikus frissítés ki van kapcsolva, mert a lokális commitok merge-konfliktust okozhatnak. Push-old fel őket fork-ra és csinálj PR-t, vagy rebase-eld az új main-re kézzel.</small>`
       applyBtn.hidden = true
     } else {
       summary.className = 'updates-summary behind'

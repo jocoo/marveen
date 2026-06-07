@@ -17,6 +17,11 @@ export interface UpdateStatus {
   remote: string
   lastChecked: number
   error?: string
+  // Set when the local HEAD has diverged from remote main: the closest
+  // ancestor of HEAD that exists upstream. `behind` is then measured
+  // baseSha..latest, and `localAhead` counts baseSha..HEAD.
+  baseSha?: string
+  localAhead?: number
 }
 
 let updateStatusCache: UpdateStatus = {
@@ -37,6 +42,53 @@ export function currentGitHead(): string {
     return execFileSync('/usr/bin/git', ['rev-parse', 'HEAD'], { cwd: PROJECT_ROOT, timeout: 3000, encoding: 'utf-8' }).trim()
   } catch {
     return ''
+  }
+}
+
+// Walk parents of `localSha` and return the first SHA that exists on the
+// remote. Returns null if none of the last `maxWalk` ancestors are found
+// upstream, or on git/network failure. Each parent costs one GitHub API
+// call (HEAD /commits/<sha>) -- caller bears the rate-limit budget.
+async function findFirstUpstreamAncestor(
+  localSha: string,
+  remote: string,
+  maxWalk = 20,
+): Promise<string | null> {
+  let ancestors: string[]
+  try {
+    const raw = execFileSync('/usr/bin/git', ['log', '--format=%H', `-n${maxWalk + 1}`, localSha], {
+      cwd: PROJECT_ROOT, timeout: 3000, encoding: 'utf-8',
+    })
+    // Skip the first line: it is localSha itself, already known to 404.
+    ancestors = raw.trim().split('\n').slice(1)
+  } catch {
+    return null
+  }
+  for (const sha of ancestors) {
+    try {
+      const res = await fetch(`https://api.github.com/repos/${remote}/commits/${sha}`, {
+        headers: { 'Accept': 'application/vnd.github+json', 'User-Agent': 'marveen-update-check' },
+      })
+      if (res.ok) return sha
+      if (res.status !== 404 && res.status !== 422) return null
+    } catch {
+      return null
+    }
+  }
+  return null
+}
+
+// Count commits on `baseSha..HEAD` (i.e. local commits that aren't on the
+// shared upstream ancestor). Returns 0 on any failure rather than throwing.
+function countCommitsAhead(baseSha: string): number {
+  try {
+    const raw = execFileSync('/usr/bin/git', ['rev-list', '--count', `${baseSha}..HEAD`], {
+      cwd: PROJECT_ROOT, timeout: 3000, encoding: 'utf-8',
+    }).trim()
+    const n = Number(raw)
+    return Number.isFinite(n) ? n : 0
+  } catch {
+    return 0
   }
 }
 
@@ -101,8 +153,37 @@ export async function refreshUpdateStatus(): Promise<UpdateStatus> {
         date: c.commit.author?.date || '',
       }))
     } else if (cmpRes.status === 404) {
-      // Local HEAD not on the remote (detached local commit / different base).
-      status.error = 'Local HEAD not found on GitHub -- different fork or unpushed commits?'
+      // Local HEAD not on the remote. Walk parents to find the closest
+      // ancestor that DOES exist upstream, then compare from there. This
+      // surfaces the real "behind" count when the user has unpushed local
+      // commits on top of an older upstream base.
+      const baseSha = await findFirstUpstreamAncestor(current, remote)
+      if (baseSha) {
+        const baseCmpRes = await fetch(`https://api.github.com/repos/${remote}/compare/${baseSha}...${status.latest}`, {
+          headers: { 'Accept': 'application/vnd.github+json', 'User-Agent': 'marveen-update-check' },
+        })
+        if (baseCmpRes.ok) {
+          const cmp = await baseCmpRes.json() as {
+            ahead_by?: number
+            commits?: { sha: string; commit: { message: string; author: { name: string; date: string } } }[]
+          }
+          status.behind = cmp.ahead_by ?? 0
+          const raw = (cmp.commits ?? []).slice().reverse()
+          status.commits = raw.map(c => ({
+            sha: c.sha,
+            short: c.sha.slice(0, 7),
+            message: (c.commit.message || '').split('\n')[0],
+            author: c.commit.author?.name || '',
+            date: c.commit.author?.date || '',
+          }))
+          status.baseSha = baseSha
+          status.localAhead = countCommitsAhead(baseSha)
+        } else {
+          status.error = 'Local HEAD not found on GitHub -- different fork or unpushed commits?'
+        }
+      } else {
+        status.error = 'Local HEAD not found on GitHub -- different fork or unpushed commits?'
+      }
     }
   } catch (err) {
     status.error = err instanceof Error ? err.message : String(err)
