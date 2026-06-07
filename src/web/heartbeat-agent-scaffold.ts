@@ -207,10 +207,11 @@ When you receive the heartbeat prompt:
 
    \`\`\`bash
    TOKEN=$(cat ${id.storeDir}/.dashboard-token)
+   MAIN_AGENT=$(cat ${id.storeDir}/main-agent-id 2>/dev/null || echo ${id.mainAgentId})
    curl -s -X POST ${id.dashboardOrigin}/api/messages \\
      -H "Content-Type: application/json" \\
      -H "Authorization: Bearer $TOKEN" \\
-     -d '{"from":"heartbeat","to":"${id.mainAgentId}","content":"<the formatted text>"}'
+     -d "{\\"from\\":\\"heartbeat\\",\\"to\\":\\"$MAIN_AGENT\\",\\"content\\":\\"<the formatted text>\\"}"
    \`\`\`
 
 4. **Stop.** Do not Telegram-reply, do not Slack, do not message

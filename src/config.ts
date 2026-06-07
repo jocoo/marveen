@@ -27,7 +27,18 @@ export const BOT_NAME = env['BOT_NAME'] ?? 'Marveen'
 // labels, API routing, etc. The installer derives this from BOT_NAME
 // (NFKD + ASCII + lowercase dashes). Older installs without this env var
 // fall back to "marveen" so nothing breaks when upgrading in place.
-export const MAIN_AGENT_ID = env['MAIN_AGENT_ID'] ?? 'marveen'
+//
+// The fallback is loud on purpose: a silent default has historically caused
+// sub-agent CLAUDE.md templates to bake `"to":"marveen"` into the curl
+// example at generation time (see agents/yzma incident). The warning gives
+// the operator a chance to catch a missing env before the rendered files
+// start drifting.
+const MAIN_AGENT_ID_FROM_ENV = env['MAIN_AGENT_ID']
+if (!MAIN_AGENT_ID_FROM_ENV) {
+  // eslint-disable-next-line no-console -- logger not wired yet at this phase
+  console.warn('[config] MAIN_AGENT_ID env not set; falling back to legacy "marveen". Set MAIN_AGENT_ID in .env to silence this warning and to avoid identity-mismatch artifacts in newly generated agents.')
+}
+export const MAIN_AGENT_ID = MAIN_AGENT_ID_FROM_ENV ?? 'marveen'
 
 export const WEB_PORT = parseInt(env['WEB_PORT'] ?? '3420', 10)
 

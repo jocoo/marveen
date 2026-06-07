@@ -8,6 +8,7 @@ import {
   openSync,
   closeSync,
   writeSync,
+  writeFileSync,
 } from 'node:fs'
 import { join } from 'node:path'
 import { execFileSync, execSync } from 'node:child_process'
@@ -403,6 +404,18 @@ async function main(): Promise<void> {
   })
 
   await acquireLock()
+
+  // Persist the current MAIN_AGENT_ID so sub-agent CLAUDE.md curl examples
+  // can resolve it at shell-runtime (via `cat store/main-agent-id`) instead
+  // of baking the generation-time literal -- the latter is the bug behind
+  // the Yzma "to":"marveen" incident, which happened when an earlier boot
+  // ran with MAIN_AGENT_ID unset and the silent fallback wrote "marveen"
+  // into the template.
+  try {
+    writeFileSync(join(STORE_DIR, 'main-agent-id'), MAIN_AGENT_ID + '\n')
+  } catch (err) {
+    logger.warn({ err }, 'Failed to write store/main-agent-id sentinel')
+  }
 
   // Database
   initDatabase()

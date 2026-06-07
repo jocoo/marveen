@@ -44,7 +44,12 @@ elif [ "$OS" = "Linux" ]; then
       exit 1
     fi
     [ -f "$INSTALL_DIR/dist/index.js" ] || (cd "$INSTALL_DIR" && npm run build)
-    nohup "$NODE_BIN" "$INSTALL_DIR/dist/index.js" > "$INSTALL_DIR/store/dashboard.log" 2>&1 &
+    # Pass MAIN_AGENT_ID + BOT_NAME explicitly. We deliberately do NOT `source
+    # .env` (token leakage, see top of file), but the node process needs at
+    # least these two keys to resolve its own identity -- otherwise config.ts
+    # silently falls back to the legacy "marveen" literal and every newly
+    # scaffolded sub-agent bakes the wrong agent id into its CLAUDE.md.
+    MAIN_AGENT_ID="$SLUG" BOT_NAME="${BOT_NAME:-Marveen}" nohup "$NODE_BIN" "$INSTALL_DIR/dist/index.js" > "$INSTALL_DIR/store/dashboard.log" 2>&1 &
     echo $! > "$INSTALL_DIR/store/dashboard.pid"
     nohup bash "$INSTALL_DIR/scripts/channels.sh" > "$INSTALL_DIR/store/channels.log" 2>&1 &
     echo $! > "$INSTALL_DIR/store/channels.pid"
