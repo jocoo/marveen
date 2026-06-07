@@ -8,6 +8,7 @@ __pycache__/
 
 # Secrets & personal data
 .env
+.env.bak-*
 store/
 workspace/
 agents/
