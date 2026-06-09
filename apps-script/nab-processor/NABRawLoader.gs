@@ -16,8 +16,10 @@
 // the FilterID formula via setFormulas in a separate call (setValues would
 // otherwise paste the formula string as literal text).
 // Column A holds the SEQUENCE(COUNTA(B2:B)) ID formula and must NOT be written.
+// Returns the count appended and the sheet row where the batch starts so the
+// caller can bake the resolved L-column FilterID values for settled rows.
 function appendToNabRaw_(rows) {
-  if (rows.length === 0) return 0
+  if (rows.length === 0) return { loaded: 0, startRow: 0 }
   const ss = SpreadsheetApp.openById(cfg_(PROP_KEYS.SPREADSHEET_ID))
   const sheet = ss.getSheetByName(SHEET_NAMES.NAB_RAW)
   const startRow = Math.max(sheet.getLastRow() + 1, 2)
@@ -25,7 +27,50 @@ function appendToNabRaw_(rows) {
   sheet.getRange(startRow, 2, rows.length, 10).setValues(rows)
   const filterFormulas = rows.map((_, i) => ['=FIND_ARRAY_PART_IN_TEXT($G' + (startRow + i) + ')'])
   sheet.getRange(startRow, 12, rows.length, 1).setFormulas(filterFormulas)
-  return rows.length
+  return { loaded: rows.length, startRow: startRow }
+}
+
+// After a SpreadsheetApp.flush() following appendToNabRaw_, read the now-
+// evaluated L-column values for the just-appended batch and replace the
+// formulas on SETTLED rows with their static integer result. Pending rows
+// (empty Processed) keep the formula so the "auto / yellow" conditional
+// format still marks them; once they settle in a future run the bake step
+// freezes them. If a cell hasn't actually evaluated yet (rare), skip baking
+// that row; the next append cycle re-attempts the same row's neighbours.
+function bakeSettledFilterIds_(startRow, rows) {
+  if (!startRow || !rows || rows.length === 0) return
+  const ss = SpreadsheetApp.openById(cfg_(PROP_KEYS.SPREADSHEET_ID))
+  const sheet = ss.getSheetByName(SHEET_NAMES.NAB_RAW)
+  const lValues = sheet.getRange(startRow, 12, rows.length, 1).getValues()
+  for (let i = 0; i < rows.length; i++) {
+    const processed = rows[i][9]
+    const isSettled = processed !== '' && processed !== null && processed !== undefined &&
+      !(typeof processed === 'string' && processed.trim() === '')
+    if (!isSettled) continue
+    const val = lValues[i][0]
+    if (typeof val === 'number') {
+      sheet.getRange(startRow + i, 12).setValue(val)
+    }
+  }
+}
+
+// Seed value for the running-balance computation. Scans NAB_Raw H bottom-up
+// for the most recent non-empty Balance and returns it as a number; tolerates
+// "$1,234.56"-style display strings. Call AFTER deletePendingNabRawRows_() so
+// only settled rows contribute. Returns 0 on an empty sheet.
+function getLastNabRawBalance_() {
+  const ss = SpreadsheetApp.openById(cfg_(PROP_KEYS.SPREADSHEET_ID))
+  const sheet = ss.getSheetByName(SHEET_NAMES.NAB_RAW)
+  const lastRow = sheet.getLastRow()
+  if (lastRow < 2) return 0
+  const hCol = sheet.getRange(2, 8, lastRow - 1, 1).getValues()
+  for (let i = hCol.length - 1; i >= 0; i--) {
+    const v = hCol[i][0]
+    if (v === '' || v === null || v === undefined) continue
+    const n = typeof v === 'number' ? v : parseFloat(String(v).replace(/[$,]/g, ''))
+    if (!isNaN(n)) return n
+  }
+  return 0
 }
 
 // Sort one batch of NORMALISED 10-col rows (B..K) in memory by Processed

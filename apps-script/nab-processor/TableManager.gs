@@ -21,7 +21,10 @@ function resizeTable_(spreadsheetId, tableId, sheetId, rowCount, columnCount) {
             endColumnIndex: columnCount
           }
         },
-        fields: 'table.range'
+        // FieldMask is relative to the Table object itself; the docs example
+        // `table.range` was wrong -- the Table type has no `table` sub-field
+        // and the request rejects with INVALID_ARGUMENT. Use `range`.
+        fields: 'range'
       }
     }]
   }

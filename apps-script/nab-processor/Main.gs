@@ -48,15 +48,20 @@ function checkForNewNABFilesInner_() {
     const files = allFiles.slice(0, MAX_FILES_PER_RUN)
     result.filesRemaining = Math.max(0, allFiles.length - files.length)
     // Per-file processing: sweep -> last-processed -> fingerprint-build ->
-    // parse -> Step-4 filter -> dedup -> in-memory sort -> append. The sweep
-    // and fingerprint build live INSIDE the loop so that pending rows landed
-    // by file N do not block file N+1 from importing the same transaction as
-    // settled (the matching fingerprint would otherwise dedup it out and
-    // leave NAB_Raw with only the stale pending row). Per Jocoo (2026-06-09).
+    // parse -> Step-4 filter -> dedup -> in-memory sort -> running-balance
+    // backfill -> append. The sweep and fingerprint build live INSIDE the
+    // loop so that pending rows landed by file N do not block file N+1 from
+    // importing the same transaction as settled (the matching fingerprint
+    // would otherwise dedup it out and leave NAB_Raw with only the stale
+    // pending row). Per Jocoo (2026-06-09).
     //
     // Cost: 3 sheet reads per file. Typical run = 1-3 files, so 3-9 reads --
     // fine. Combine into one readNabRawSettledState_ later if profiling
     // demands it; do not optimise pre-emptively (Yzma's call).
+    //
+    // Filter-ID bake step runs against the per-batch startRow + sorted pair
+    // after a single shared flush, so we collect those here and replay below.
+    const batches = []
     for (const f of files) {
       try {
         tick('processing ' + f.name)
@@ -76,8 +81,19 @@ function checkForNewNABFilesInner_() {
         const deduped = filterNewRowsByFingerprint_(stepFiltered, existingFingerprints)
         if (deduped.length > 0) {
           const sorted = sortNewRowsInMemory_(deduped)
-          const loaded = appendToNabRaw_(sorted)
+          // Running-balance backfill: seed from the last settled H value in
+          // NAB_Raw and accumulate Amount across the sorted batch. Pending
+          // rows end up with a projected balance; next run's
+          // deletePendingNabRawRows_ wipes them and re-projects.
+          let running = getLastNabRawBalance_()
+          for (const r of sorted) {
+            const amt = parseFloat(String(r[1]).replace(/[$,]/g, ''))
+            running = running + (isNaN(amt) ? 0 : amt)
+            r[6] = running
+          }
+          const { loaded, startRow } = appendToNabRaw_(sorted)
           result.rowsLoaded += loaded
+          batches.push({ startRow: startRow, rows: sorted })
           for (const r of sorted) {
             // r[9] = Processed (K). Non-empty = settled, empty = pending.
             if (r[9]) result.settledLoaded += 1
@@ -92,15 +108,18 @@ function checkForNewNABFilesInner_() {
       }
     }
     tick('per-file loop done, ' + result.rowsLoaded + ' new rows loaded, ' + result.pendingOverwritten + ' pending swept total')
-    // Table resizes -- NAB picks up the new NAB_Raw rows via its A2 formula,
-    // so the NAB table needs its range extended even when we didn't write
-    // directly to it. Same for Transactions + Everyday_Balances. Resize also
-    // when only pending rows were deleted, since the Table range must shrink
-    // to match the NAB_Raw row count.
+    // Flush so the L-column formulas evaluate, then freeze the resolved
+    // FilterID integer on settled rows (pending rows keep the formula and
+    // its yellow auto-format), then resize tables. NAB picks up the new
+    // NAB_Raw rows via its A2 formula, so the NAB table needs its range
+    // extended even when we didn't write directly to it. Same for
+    // Transactions + Everyday_Balances. Resize also when only pending rows
+    // were deleted, since the Table range must shrink to match the row count.
     try {
       if (result.rowsLoaded > 0 || result.pendingOverwritten > 0) {
-        tick('SpreadsheetApp.flush + resize tables')
+        tick('SpreadsheetApp.flush + bake FilterID + resize tables')
         SpreadsheetApp.flush()
+        for (const b of batches) bakeSettledFilterIds_(b.startRow, b.rows)
         resizeNabTable_()
         resizeTransactionsTable_()
         resizeEverydayBalancesTable_()
