@@ -1009,8 +1009,11 @@ const agentModel = document.getElementById('agentModel')
 const toast = document.getElementById('toast')
 
 const AVATARS = [
-  'Kuzco.png', 'Pacha.png', 'Chicha.png', 'Chaca.png', 'Tipo.png',
-  'Kronk.png', 'Yzma.png', 'Mata.png', 'Rudy.png'
+  '01_robot.png', '02_wizard_girl.png', '03_knight.png', '04_ninja.png',
+  '05_pirate.png', '06_scientist_girl.png', '07_astronaut.png', '08_viking.png',
+  '09_cowgirl.png', '10_detective.png', '11_chef.png', '12_witch.png',
+  '13_samurai.png', '14_fairy_girl.png', '15_firefighter.png', '16_punk_girl.png',
+  '17_explorer.png', '18_dj.png', '19_princess.png', '20_alien.png'
 ]
 
 let selectedAvatar = null
