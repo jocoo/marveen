@@ -112,31 +112,44 @@ function fingerprint_(date, description, amount) {
   return d + '|' + desc + '|' + (Number.isFinite(amt) ? amt.toFixed(2) : '')
 }
 
+// Build a Map<fp, count> of fingerprints already present in NAB_Raw. A Set
+// is wrong here: two genuinely distinct transactions can share Date|Desc|
+// Amount (e.g. two Printify orders for the same price on the same day), and
+// a Set would drop the second one. Tracking occurrence counts lets the
+// dedupe step accept the Nth occurrence as long as NAB_Raw has fewer than N.
 function buildExistingFingerprints_() {
   const ss = SpreadsheetApp.openById(cfg_(PROP_KEYS.SPREADSHEET_ID))
   const sheet = ss.getSheetByName(SHEET_NAMES.NAB_RAW)
   const lastRow = sheet.getLastRow()
-  if (lastRow < 2) return new Set()
+  if (lastRow < 2) return new Map()
   // Cols B(2)..G(7): Date, Amount, AcctNo, Empty, Type, Description.
   const values = sheet.getRange(2, 2, lastRow - 1, 6).getValues()
-  const out = new Set()
+  const counts = new Map()
   for (const v of values) {
     const date = v[0], amount = v[1], desc = v[5]
     if (!date && !desc && !amount) continue
-    out.add(fingerprint_(date, desc, amount))
+    const fp = fingerprint_(date, desc, amount)
+    counts.set(fp, (counts.get(fp) || 0) + 1)
   }
-  return out
+  return counts
 }
 
-// Deduplicate against existing fingerprints; mutates `existingFingerprints` to
-// include the new rows it accepts so within-batch duplicates are also caught.
+// Occurrence-counter dedup. Accepts a row if its 1-based occurrence within
+// the current CSV exceeds the count already in NAB_Raw, so legitimate same-
+// fingerprint duplicates (multiple identical Printify orders) are preserved
+// when both appear in the CSV. Mutates `existingCounts` to include accepted
+// rows so cross-file dedupe within one run continues to work.
 // Rows are 10-col arrays: Date(0), Amount(1), ..., Description(5), ...
-function filterNewRowsByFingerprint_(rows, existingFingerprints) {
+function filterNewRowsByFingerprint_(rows, existingCounts) {
+  const csvSeen = new Map()
   const out = []
   for (const r of rows) {
     const fp = fingerprint_(r[0], r[5], r[1])
-    if (existingFingerprints.has(fp)) continue
-    existingFingerprints.add(fp)
+    const csvCount = (csvSeen.get(fp) || 0) + 1
+    csvSeen.set(fp, csvCount)
+    const existingCount = existingCounts.get(fp) || 0
+    if (csvCount <= existingCount) continue
+    existingCounts.set(fp, existingCount + 1)
     out.push(r)
   }
   return out
