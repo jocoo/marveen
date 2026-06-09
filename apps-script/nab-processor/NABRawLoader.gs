@@ -41,8 +41,16 @@ function sortNewRowsInMemory_(rows) {
 // Sweep every NAB_Raw row whose Processed (column K) is empty. These are stale
 // pending rows from a previous import; the fresh CSV will reintroduce them
 // (possibly as settled, with a different fingerprint). Must run BEFORE the
-// fingerprint set is built, otherwise old pending fingerprints would block
-// the now-settled rows from being imported. Returns the count deleted.
+// fingerprint set is built for the current file, otherwise old pending
+// fingerprints would block the now-settled rows from being imported.
+//
+// Pending-row detection is structural (K empty), not semantic (F == "PURCHASE
+// AUTHORISATION"). Jocoo confirmed (2026-06-09): K-empty is future-proof if
+// NAB ever introduces a new pre-settlement state.
+//
+// Contiguous pending-row runs are batched into a single deleteRows(start,
+// count) call. NAB_Raw is sorted such that pending rows cluster, so this is
+// usually 1-2 API calls regardless of how many pending rows exist.
 function deletePendingNabRawRows_() {
   const ss = SpreadsheetApp.openById(cfg_(PROP_KEYS.SPREADSHEET_ID))
   const sheet = ss.getSheetByName(SHEET_NAMES.NAB_RAW)
@@ -57,9 +65,25 @@ function deletePendingNabRawRows_() {
       (typeof v === 'string' && v.trim() === ''))
     if (isEmpty) pendingRows.push(i + 2)
   }
-  // Bottom-up so indices stay valid while we delete.
-  for (let i = pendingRows.length - 1; i >= 0; i--) {
-    sheet.deleteRow(pendingRows[i])
+  if (pendingRows.length === 0) return 0
+  // Collapse into contiguous (start, count) groups so each run of adjacent
+  // pending rows deletes in one API call instead of one per row.
+  const groups = []
+  let start = pendingRows[0]
+  let count = 1
+  for (let i = 1; i < pendingRows.length; i++) {
+    if (pendingRows[i] === pendingRows[i - 1] + 1) {
+      count++
+    } else {
+      groups.push([start, count])
+      start = pendingRows[i]
+      count = 1
+    }
+  }
+  groups.push([start, count])
+  // Delete bottom-up so earlier group start-rows stay valid as we shrink.
+  for (let i = groups.length - 1; i >= 0; i--) {
+    sheet.deleteRows(groups[i][0], groups[i][1])
   }
   return pendingRows.length
 }

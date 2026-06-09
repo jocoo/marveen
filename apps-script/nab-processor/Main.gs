@@ -47,29 +47,28 @@ function checkForNewNABFilesInner_() {
     }
     const files = allFiles.slice(0, MAX_FILES_PER_RUN)
     result.filesRemaining = Math.max(0, allFiles.length - files.length)
-    // Sweep stale pending FIRST. Order matters: the fingerprint set built
-    // below would otherwise still contain the old pending fingerprints and
-    // block the now-settled rows in this CSV from being imported. Also makes
-    // getLastProcessedDate_ honest (pending rows have empty Processed and
-    // would not affect MAX, but the sheet stays smaller for the read).
-    tick('deletePendingNabRawRows_ start')
-    result.pendingOverwritten = deletePendingNabRawRows_()
-    tick('deletePendingNabRawRows_ done, removed ' + result.pendingOverwritten)
-    tick('getLastProcessedDate_ start')
-    const lastProcessedDate = getLastProcessedDate_()
-    tick('getLastProcessedDate_ done: ' + (lastProcessedDate
-      ? Utilities.formatDate(lastProcessedDate, Session.getScriptTimeZone(), 'yyyy-MM-dd')
-      : 'null'))
-    tick('buildExistingFingerprints_ start')
-    const existingFingerprints = buildExistingFingerprints_()
-    tick('buildExistingFingerprints_ done, size ' + existingFingerprints.size)
-    // Per-file processing: parse -> Step-4 filter -> fingerprint dedup ->
-    // in-memory sort -> append. Per Jocoo (2026-06-08 23:47 AEST), batching
-    // across files duplicates rows because the rolling 30-tx snapshots
-    // overlap by ~90% and we'd lose per-file dedup boundaries.
+    // Per-file processing: sweep -> last-processed -> fingerprint-build ->
+    // parse -> Step-4 filter -> dedup -> in-memory sort -> append. The sweep
+    // and fingerprint build live INSIDE the loop so that pending rows landed
+    // by file N do not block file N+1 from importing the same transaction as
+    // settled (the matching fingerprint would otherwise dedup it out and
+    // leave NAB_Raw with only the stale pending row). Per Jocoo (2026-06-09).
+    //
+    // Cost: 3 sheet reads per file. Typical run = 1-3 files, so 3-9 reads --
+    // fine. Combine into one readNabRawSettledState_ later if profiling
+    // demands it; do not optimise pre-emptively (Yzma's call).
     for (const f of files) {
       try {
         tick('processing ' + f.name)
+        const swept = deletePendingNabRawRows_()
+        result.pendingOverwritten += swept
+        tick('  pending sweep removed ' + swept)
+        const lastProcessedDate = getLastProcessedDate_()
+        tick('  last-processed: ' + (lastProcessedDate
+          ? Utilities.formatDate(lastProcessedDate, Session.getScriptTimeZone(), 'yyyy-MM-dd')
+          : 'null'))
+        const existingFingerprints = buildExistingFingerprints_()
+        tick('  fingerprint set size ' + existingFingerprints.size)
         const text = DriveApp.getFileById(f.id).getBlob().getDataAsString()
         const parsed = parseCsvText_(text)
         const normalised = normaliseNabRows_(parsed)
@@ -92,7 +91,7 @@ function checkForNewNABFilesInner_() {
         // Skip this file but keep processing the rest.
       }
     }
-    tick('per-file loop done, ' + result.rowsLoaded + ' new rows loaded')
+    tick('per-file loop done, ' + result.rowsLoaded + ' new rows loaded, ' + result.pendingOverwritten + ' pending swept total')
     // Table resizes -- NAB picks up the new NAB_Raw rows via its A2 formula,
     // so the NAB table needs its range extended even when we didn't write
     // directly to it. Same for Transactions + Everyday_Balances. Resize also
