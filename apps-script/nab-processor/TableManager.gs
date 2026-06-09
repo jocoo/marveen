@@ -43,35 +43,51 @@ function getSheetMetadata_(spreadsheetId, sheetName) {
   throw new Error('Sheet not found: ' + sheetName)
 }
 
-// Resize the NAB table to cover all data rows. Reads the actual last data row
-// from the bound NAB worksheet (via SpreadsheetApp, faster than re-fetching
-// API metadata), then issues a single updateTable batchUpdate.
+// Resize the NAB table to cover all data rows. Each per-table wrapper
+// null-guards its own Table ID so that one missing config (e.g.
+// EVERYDAY_BALANCES_TABLE_ID never set) surfaces as its own Telegram alert
+// instead of swallowing all three resizes via Main.gs's outer try/catch.
 function resizeNabTable_() {
+  const tableId = cfgOptional_(PROP_KEYS.NAB_TABLE_ID)
+  if (!tableId) {
+    notifyError_('resize-nab', new Error('NAB_TABLE_ID not configured -- run setupTableIds()'))
+    return
+  }
   const sid = cfg_(PROP_KEYS.SPREADSHEET_ID)
   const ss = SpreadsheetApp.openById(sid)
   const sheet = ss.getSheetByName(SHEET_NAMES.NAB)
   const lastRow = sheet.getLastRow()
   const lastCol = sheet.getLastColumn()
   const meta = getSheetMetadata_(sid, SHEET_NAMES.NAB)
-  resizeTable_(sid, cfg_(PROP_KEYS.NAB_TABLE_ID), meta.sheetId, lastRow, lastCol)
+  resizeTable_(sid, tableId, meta.sheetId, lastRow, lastCol)
 }
 
 function resizeTransactionsTable_() {
+  const tableId = cfgOptional_(PROP_KEYS.TRANSACTIONS_TABLE_ID)
+  if (!tableId) {
+    notifyError_('resize-transactions', new Error('TRANSACTIONS_TABLE_ID not configured -- run setupTableIds()'))
+    return
+  }
   const sid = cfg_(PROP_KEYS.SPREADSHEET_ID)
   const ss = SpreadsheetApp.openById(sid)
   const sheet = ss.getSheetByName(SHEET_NAMES.TRANSACTIONS)
   const lastRow = sheet.getLastRow()
   const lastCol = sheet.getLastColumn()
   const meta = getSheetMetadata_(sid, SHEET_NAMES.TRANSACTIONS)
-  resizeTable_(sid, cfg_(PROP_KEYS.TRANSACTIONS_TABLE_ID), meta.sheetId, lastRow, lastCol)
+  resizeTable_(sid, tableId, meta.sheetId, lastRow, lastCol)
 }
 
 function resizeEverydayBalancesTable_() {
+  const tableId = cfgOptional_(PROP_KEYS.EVERYDAY_BALANCES_TABLE_ID)
+  if (!tableId) {
+    notifyError_('resize-everyday-balances', new Error('EVERYDAY_BALANCES_TABLE_ID not configured -- run setupTableIds()'))
+    return
+  }
   const sid = cfg_(PROP_KEYS.SPREADSHEET_ID)
   const ss = SpreadsheetApp.openById(sid)
   const sheet = ss.getSheetByName(SHEET_NAMES.EVERYDAY_BALANCES)
   const lastRow = sheet.getLastRow()
   const lastCol = sheet.getLastColumn()
   const meta = getSheetMetadata_(sid, SHEET_NAMES.EVERYDAY_BALANCES)
-  resizeTable_(sid, cfg_(PROP_KEYS.EVERYDAY_BALANCES_TABLE_ID), meta.sheetId, lastRow, lastCol)
+  resizeTable_(sid, tableId, meta.sheetId, lastRow, lastCol)
 }

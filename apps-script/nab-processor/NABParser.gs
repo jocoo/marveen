@@ -47,7 +47,7 @@ function normaliseNabRows_(parsed) {
       '',
       pick(row, iType),
       String(pick(row, iDesc)).trim(),
-      pick(row, iBalance),
+      '', // Balance: not imported (Yzma spec mod, 2026-06-09)
       pick(row, iCategory),
       pick(row, iMerchant),
       String(pick(row, iProcessed)).trim()

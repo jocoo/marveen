@@ -1,13 +1,21 @@
-// NABRawLoader.gs -- appends new rows to NAB_Raw (B..K), reads helpers used by
+// NABRawLoader.gs -- appends new rows to NAB_Raw (B..L), reads helpers used by
 // the processor, and applies the post-import sort.
 //
-// NAB_Raw layout (B..K, A is a SEQUENCE formula and is never touched here):
+// NAB_Raw layout (B..L, A is a SEQUENCE formula and is never touched here):
 //   B=Date | C=Amount | D=Account Number | E=Empty | F=Transaction Type |
-//   G=Transaction Details | H=Balance | I=Category | J=Merchant Name | K=Processed
+//   G=Transaction Details | H=Balance | I=Category | J=Merchant Name |
+//   K=Processed | L=FilterID
+// L is a formula =FIND_ARRAY_PART_IN_TEXT($G<row>) -- a custom function bound
+// to the spreadsheet that resolves the FilterID via the Filter sheet lookup.
+// We write a formula here (not the resolved integer) so that the sheet stays
+// the single source of truth for FilterID resolution and Jocoo's manual
+// overrides stay visible against the cell's auto-format.
 
-// Append normalised rows to NAB_Raw at the next empty row, starting at column B.
+// Append normalised rows to NAB_Raw at the next empty row.
+// Columns B..K receive the parsed CSV values via setValues; column L receives
+// the FilterID formula via setFormulas in a separate call (setValues would
+// otherwise paste the formula string as literal text).
 // Column A holds the SEQUENCE(COUNTA(B2:B)) ID formula and must NOT be written.
-// Returns the count appended.
 function appendToNabRaw_(rows) {
   if (rows.length === 0) return 0
   const ss = SpreadsheetApp.openById(cfg_(PROP_KEYS.SPREADSHEET_ID))
@@ -15,26 +23,28 @@ function appendToNabRaw_(rows) {
   const startRow = Math.max(sheet.getLastRow() + 1, 2)
   // 10 cols at B..K. Each row must be exactly 10 cells in the agreed order.
   sheet.getRange(startRow, 2, rows.length, 10).setValues(rows)
+  const filterFormulas = rows.map((_, i) => ['=FIND_ARRAY_PART_IN_TEXT($G' + (startRow + i) + ')'])
+  sheet.getRange(startRow, 12, rows.length, 1).setFormulas(filterFormulas)
   return rows.length
 }
 
-// Sort one batch of NORMALISED 10-col rows (B..K) in memory by Merchant Name
-// (index 8 = col J) asc, then Processed (index 9 = col K) desc. Pending rows
-// (empty Processed) sort to the bottom within each merchant. NAB_Raw itself is
-// never re-sorted as a whole sheet -- Jocoo confirmed (2026-06-08 23:47 AEST)
-// that the raw_Sort() macro in the manual flow sorted the Macro scratch sheet,
-// NOT NAB_Raw. We just ensure each appended batch is internally ordered.
+// Sort one batch of NORMALISED 10-col rows (B..K) in memory by Processed
+// (index 9 = col K) ASCENDING -- oldest settled first, pending rows (empty
+// Processed) at the end. Single key per Jocoo (2026-06-09). The earlier
+// Merchant-Name-then-Processed-desc scheme was a misread of the manual macro;
+// the raw_Sort() macro acted on the Macro scratch sheet, NOT NAB_Raw, and
+// NAB_Raw itself is never re-sorted as a whole sheet -- we just keep each
+// appended batch internally ordered.
+//
+// Pending rows are mapped to +Infinity so they sort last; Infinity - Infinity
+// = 0 keeps the pending bucket stable in insertion order.
 function sortNewRowsInMemory_(rows) {
   return rows.slice().sort((a, b) => {
-    const ma = String(a[8] == null ? '' : a[8]).toLowerCase()
-    const mb = String(b[8] == null ? '' : b[8]).toLowerCase()
-    if (ma < mb) return -1
-    if (ma > mb) return 1
     const pa = parseNabDateString_(a[9])
     const pb = parseNabDateString_(b[9])
-    const ta = pa ? pa.getTime() : -Infinity
-    const tb = pb ? pb.getTime() : -Infinity
-    return tb - ta
+    const ta = pa ? pa.getTime() : Infinity
+    const tb = pb ? pb.getTime() : Infinity
+    return ta - tb
   })
 }
 
