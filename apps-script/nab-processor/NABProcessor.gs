@@ -56,14 +56,26 @@ function appendToNabGeneral_(rows) {
 // rows (NAB_Raw.Processed empty) are skipped -- they get classified once they
 // settle, otherwise the next delete-and-append cycle would orphan their
 // NAB_General rows.
+//
+// Scoped to THIS run's imports via currentBatchIds (kanban #39 fix). The
+// previous version walked the entire NAB sheet and only deduped against the
+// LIVE NAB_General contents, so any row whose ID had been removed from
+// NAB_General (manual cleanup, post-classification move, etc.) was re-pushed
+// on every subsequent run -- the function conflated "is in the outbox" with
+// "has ever been classified". Restricting the loop to IDs the current run
+// just appended makes the function idempotent: empty run = no writes.
+//
+// currentBatchIds: Set<number> -- SEQUENCE IDs of rows appended in this run,
+//                                 derived from each batch's startRow + offset.
 // Returns the count of unclassified-purpose rows pushed to NAB_General.
-function classifyAndPushPending_() {
+function classifyAndPushPending_(currentBatchIds) {
   const nabRows = readNabSheet_()
   const existingIds = readExistingGeneralIds_()
   const pendingIds = readPendingNabRawIds_()
   const toGeneral = []
   let pendingCount = 0
   for (const row of nabRows) {
+    if (!currentBatchIds.has(row.id)) continue
     if (existingIds.has(row.id)) continue
     if (pendingIds.has(row.id)) continue
     const desc = String(row.description || '').toLowerCase()

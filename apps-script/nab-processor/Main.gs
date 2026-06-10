@@ -33,7 +33,13 @@ function checkForNewNABFilesInner_() {
     pendingLoaded: 0,
     pushedToGeneral: 0,
     pendingClassification: 0,
-    validationFailures: 0
+    validationFailures: 0,
+    generalIdFixes: 0,
+    generalDateFixes: 0,
+    generalSkipped: 0,
+    recIdFixes: 0,
+    recDateFixes: 0,
+    recSkipped: 0
   }
   const t0 = Date.now()
   const tick = (label) => Logger.log('[+' + ((Date.now() - t0) / 1000).toFixed(1) + 's] ' + label)
@@ -128,8 +134,34 @@ function checkForNewNABFilesInner_() {
     } catch (err) {
       notifyError_('table-resize', err)
     }
-    tick('classifyAndPushPending_ start')
-    const classify = classifyAndPushPending_()
+    // Step 9 (kanban #40): self-heal stale IDs / Dates in NAB_General + NAB_Rec
+    // before classification runs. assertNabAnomaliesClean_ throws if any row
+    // remains red after the fix attempt, halting the pipeline before
+    // classifyAndPushPending_ so downstream data is never built on top of
+    // inconsistent ledger state.
+    tick('Step 9: anomaly fix start')
+    const nabIndexes = buildNabRawIndexes_()
+    const genFix = fixNabGeneralAnomalies_(nabIndexes)
+    result.generalIdFixes = genFix.idUpdates
+    result.generalDateFixes = genFix.dateUpdates
+    result.generalSkipped = genFix.skipped
+    const recFix = fixNabRecAnomalies_(nabIndexes)
+    result.recIdFixes = recFix.idUpdates
+    result.recDateFixes = recFix.dateUpdates
+    result.recSkipped = recFix.skipped
+    assertNabAnomaliesClean_(nabIndexes)
+    tick('Step 9: done (general +' + genFix.idUpdates + ' id / +' + genFix.dateUpdates +
+      ' date / ' + genFix.skipped + ' skipped; rec +' + recFix.idUpdates + ' id / +' +
+      recFix.dateUpdates + ' date / ' + recFix.skipped + ' skipped)')
+    // Kanban #39 fix: scope classifier to THIS run's appended rows only.
+    // SEQUENCE ID for the i-th row in batch b = (b.startRow - 1) + i.
+    // Empty batches array -> empty Set -> classifier writes nothing (idempotent).
+    const currentBatchIds = new Set()
+    for (const b of batches) {
+      for (let i = 0; i < b.rows.length; i++) currentBatchIds.add(b.startRow - 1 + i)
+    }
+    tick('classifyAndPushPending_ start (batch ids: ' + currentBatchIds.size + ')')
+    const classify = classifyAndPushPending_(currentBatchIds)
     tick('classifyAndPushPending_ done, pushed ' + classify.pushed)
     result.pushedToGeneral = classify.pushed
     result.pendingClassification = classify.pending
