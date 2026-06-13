@@ -124,6 +124,8 @@ curl -s -H "Authorization: Bearer $(cat store/.dashboard-token)" \
 
 ## Kanban tábla
 
+**Hivatkozás**: a kártyákat a `seq` számukkal hivatkozd (pl. "#31"), NEM a 8-karakteres UUID-vel. A dashboardon {{OWNER_NAME}} csak a `#NN`-t látja a kártya tetején. A `/api/kanban` válasz `seq` field-jét használd; az UUID csak zárójelben jöjjön ha disambiguation kell ("#31 (cb5080e5)").
+
 A kanban tábla az SQLite adatbázisban van: `store/claudeclaw.db` -> `kanban_cards` és `kanban_comments` táblák.
 
 Státuszok: planned, in_progress, waiting, done

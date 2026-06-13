@@ -188,6 +188,12 @@ IMPORTANT FORMATTING RULES:
 
 IMPORTANT: The CLAUDE.md MUST include the following sections at the end (copy them exactly, replacing AGENT_NAME with ${name}):
 
+## Kanban tábla
+
+**Hivatkozás**: a kártyákat a \`seq\` számukkal hivatkozd (pl. "#31"), NEM a 8-karakteres UUID-vel. A dashboardon ${OWNER_NAME} csak a \`#NN\`-t látja a kártya tetején. A \`/api/kanban\` válasz \`seq\` field-jét használd; az UUID csak zárójelben jöjjön ha disambiguation kell ("#31 (cb5080e5)").
+
+A kanban tábla az SQLite adatbázisban van: \`store/claudeclaw.db\` -> \`kanban_cards\` és \`kanban_comments\` táblák. Státuszok: planned, in_progress, waiting, done. Prioritások: low, normal, high, urgent.
+
 ## Memoria rendszer
 
 A memoria 3 retegbol all (hot/warm/cold) + napi naplo.

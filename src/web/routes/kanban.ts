@@ -69,7 +69,8 @@ export async function tryHandleKanban(ctx: RouteContext): Promise<boolean> {
     const data = JSON.parse(body.toString())
     const id = randomUUID().slice(0, 8)
     createKanbanCard({ id, ...data })
-    json(res, { ok: true, id })
+    const card = getKanbanCard(id)
+    json(res, { ok: true, id, seq: card?.seq })
     return true
   }
 
