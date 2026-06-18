@@ -25,6 +25,7 @@ import {
   sessionExistsOnHost,
 } from './agent-process.js'
 import { MAIN_CHANNELS_SESSION } from './main-agent.js'
+import { sendMarveenAlert } from './telegram.js'
 
 // Channel-coordinator sources whose messages are real inbound user messages
 // (relayed during a native-channel disconnect window), NOT inter-agent data.
@@ -45,6 +46,41 @@ const MESSAGE_ABANDON_WINDOW_MS = 60 * 60 * 1000
 // Log "skipping, target not ready" at most once per message id so a busy
 // receiver over many 5s ticks does not spam the log.
 const routerLoggedMisses: Set<number> = new Set()
+
+// Why an inter-agent message was marked failed. The router only escalates
+// genuine delivery failures (the target was meant to receive it, but never
+// did) -- input-validation failures (empty/malformed from_agent) are a
+// misconfig / attacker signal rather than a stuck user message and stay
+// quiet.
+export type MessageFailureKind = 'abandoned' | 'inject-failed' | 'invalid-from'
+
+export function shouldEscalateFailure(kind: MessageFailureKind): boolean {
+  return kind === 'abandoned' || kind === 'inject-failed'
+}
+
+// Build the human-readable Telegram text for a failed inter-agent message.
+// Extracted so the format is unit-testable without the network round trip.
+// The preview is the first non-empty line of the original content, capped
+// at PREVIEW_MAX_CHARS with a trailing ellipsis -- a longer preview would
+// blow past Telegram's text wrap and hide the actionable phrasing.
+const PREVIEW_MAX_CHARS = 120
+export function buildFailureNotificationText(from: string, to: string, content: string, reason: string): string {
+  const firstNonEmpty = (content || '').split('\n').find((l) => l.trim()) ?? ''
+  const previewLine = firstNonEmpty.trim()
+  const preview = previewLine.length > PREVIEW_MAX_CHARS
+    ? previewLine.slice(0, PREVIEW_MAX_CHARS - 3) + '...'
+    : previewLine
+  return `${from} uzenete nem ert celba (-> ${to}): "${preview}". Kerlek ertesitsd ujra. (failure: ${reason})`
+}
+
+// Fire the owner-alert without blocking the router loop. Caller is
+// expected to invoke this AFTER markMessageFailed returns true, so the
+// notification is gated on the actual DB transition and we never double-
+// notify on a no-op markFailed. Errors are swallowed inside sendMarveenAlert.
+function notifyOwnerFailureAsync(from: string, to: string, content: string, reason: string): void {
+  const text = buildFailureNotificationText(from, to, content, reason)
+  void sendMarveenAlert(text)
+}
 
 /**
  * Pure decision: should a pending inter-agent message be abandoned?
@@ -88,7 +124,10 @@ export function startMessageRouter(): NodeJS.Timeout {
 
       if (shouldAbandon(sessionExists, ageMs, MESSAGE_ABANDON_WINDOW_MS)) {
         logger.warn({ id: msg.id, from: msg.from_agent, to: msg.to_agent, ageMs }, 'Agent message abandoned: target session absent for full retry window')
-        if (!markMessageFailed(msg.id, 'Abandoned: target session absent for full retry window')) {
+        const reason = 'Abandoned: target session absent for full retry window'
+        if (markMessageFailed(msg.id, reason)) {
+          if (shouldEscalateFailure('abandoned')) notifyOwnerFailureAsync(msg.from_agent, msg.to_agent, msg.content, reason)
+        } else {
           logger.warn({ id: msg.id }, 'markMessageFailed affected 0 rows (deleted concurrently?)')
         }
         routerLoggedMisses.delete(msg.id)
@@ -166,7 +205,10 @@ export function startMessageRouter(): NodeJS.Timeout {
         logger.info({ id: msg.id, from: msg.from_agent, to: msg.to_agent, category: isChannelInbound ? 'channel-inbound' : trusted ? 'trusted-peer' : 'untrusted' }, 'Agent message delivered')
       } catch (err) {
         logger.warn({ err, id: msg.id }, 'Failed to deliver agent message')
-        if (!markMessageFailed(msg.id, 'Failed to inject into tmux session')) {
+        const reason = 'Failed to inject into tmux session'
+        if (markMessageFailed(msg.id, reason)) {
+          if (shouldEscalateFailure('inject-failed')) notifyOwnerFailureAsync(msg.from_agent, msg.to_agent, msg.content, reason)
+        } else {
           logger.warn({ id: msg.id }, 'markMessageFailed affected 0 rows (deleted concurrently?)')
         }
         routerLoggedMisses.delete(msg.id)
