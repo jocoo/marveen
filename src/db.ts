@@ -1,10 +1,27 @@
 import Database from 'better-sqlite3'
 import { join } from 'node:path'
 import { existsSync, mkdirSync, readFileSync, renameSync, chmodSync, openSync, closeSync } from 'node:fs'
-import { STORE_DIR, DB_FILENAME, ALLOWED_CHAT_ID, OLLAMA_URL } from './config.js'
+import { STORE_DIR, DB_FILENAME, ALLOWED_CHAT_ID, OLLAMA_URL, MAIN_AGENT_ID } from './config.js'
 import { logger } from './logger.js'
 
 let db: Database.Database
+
+// SQLite has no parameter binding for DDL DEFAULT clauses, so MAIN_AGENT_ID
+// has to be interpolated into the schema strings below. The agent id comes
+// from .env and is operator-controlled, but an operator who can write to
+// .env already owns the install -- the risk we actually want to close is
+// the typo / accidental quote / shell character that would silently corrupt
+// the schema string and either fail to migrate or leave the DEFAULT empty.
+// Constrain to the same charset the rest of the codebase uses for ids and
+// throw loudly otherwise so the install fails at boot instead of producing
+// a half-baked schema.
+const SAFE_AGENT_ID_RE = /^[a-zA-Z0-9_-]+$/
+export function safeIdForSql(id: string): string {
+  if (!id || !SAFE_AGENT_ID_RE.test(id)) {
+    throw new Error(`Refusing to interpolate id ${JSON.stringify(id)} into SQL: must match ${SAFE_AGENT_ID_RE}`)
+  }
+  return id
+}
 
 // Lock the DB file and its sidecars (WAL, SHM, rollback journal) down to
 // owner-only. better-sqlite3 opens the main file with the process umask
@@ -175,7 +192,7 @@ export function initDatabase(dbPathOverride?: string): void {
   }
   // Migration: add agent_id, category, auto_generated columns to memories
   try {
-    db.exec("ALTER TABLE memories ADD COLUMN agent_id TEXT NOT NULL DEFAULT 'marveen'")
+    db.exec(`ALTER TABLE memories ADD COLUMN agent_id TEXT NOT NULL DEFAULT '${safeIdForSql(MAIN_AGENT_ID)}'`)
   } catch {
     // column already exists
   }
@@ -241,7 +258,7 @@ export function initDatabase(dbPathOverride?: string): void {
           salience REAL NOT NULL DEFAULT 1.0,
           created_at INTEGER NOT NULL,
           accessed_at INTEGER NOT NULL,
-          agent_id TEXT NOT NULL DEFAULT 'marveen',
+          agent_id TEXT NOT NULL DEFAULT '${safeIdForSql(MAIN_AGENT_ID)}',
           category TEXT NOT NULL DEFAULT 'warm' CHECK(category IN ('hot','warm','cold','shared')),
           auto_generated INTEGER NOT NULL DEFAULT 0,
           keywords TEXT
@@ -486,7 +503,7 @@ export function initDatabase(dbPathOverride?: string): void {
       description TEXT,
       category TEXT NOT NULL DEFAULT 'Egyéb',
       status TEXT NOT NULL DEFAULT 'new' CHECK(status IN ('new','reviewed','kanban','rejected')),
-      source TEXT NOT NULL DEFAULT 'marveen',
+      source TEXT NOT NULL DEFAULT '${safeIdForSql(MAIN_AGENT_ID)}',
       kanban_id TEXT,
       created_at INTEGER NOT NULL,
       updated_at INTEGER NOT NULL
