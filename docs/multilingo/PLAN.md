@@ -2,7 +2,7 @@
 
 > Kanban #57. BA spec, nem implementation plan.
 > Szerző: Yzma. Implementation plan -> Kronk, sign-off -> Jocoo.
-> Utolsó frissítés: 2026-06-15.
+> Utolsó frissítés: 2026-06-18.
 
 ---
 
@@ -12,6 +12,7 @@
 2. Ugyanaz a Cuzcoo persona, angolra fordítva.
 3. HU source-of-truth, EN = fordítás (Yzma override-kérése ellenére Jocoo döntése).
 4. Cuzcoo (és minden ágens) az adott üzenet nyelvén válaszol -- Jocoo EN/HU kevert, az ágensek követik.
+5. **Stratégiai döntés (2026-06-18)**: A jövőbeli business Marveen instance EN alapnyelven indul (külön instance). A jelenlegi Marveen / Multilingo Scope 1 kizárólag Jocoo személyes HU-instance-ára vonatkozik. Következmény: fleet-ágensek EN fordítása (OQ1) NEM a Scope 1 feladata -- az a business-instance projekté. Scope 1 mérete NEM duplázódik.
 
 ---
 
@@ -322,7 +323,8 @@ Marveen Multilingo v1 akkor "shipped" ha:
 
 ## Open questions (5)
 
-**OQ1 -- Fleet-ágensek scope-ja**: A Locked decision "Cuzcoo és minden ágens EN-ben válaszol EN install esetén" -- ez azt jelenti, hogy Kronk, Chicha, Mata, Tipo, Yzma SOUL.md-je szintén lefordítandó? Az ágens-specifikus persona karakterek (Yzma cinizmusa, Chicha marketing hangvétele) mind EN-fordítást igényelnek -- ez a Scope 1 méretét megduplázza.
+**OQ1 -- Fleet-ágensek scope-ja**: ~~A Locked decision "Cuzcoo és minden ágens EN-ben válaszol EN install esetén" -- ez azt jelenti, hogy Kronk, Chicha, Mata, Tipo, Yzma SOUL.md-je szintén lefordítandó? Az ágens-specifikus persona karakterek (Yzma cinizmusa, Chicha marketing hangvétele) mind EN-fordítást igényelnek -- ez a Scope 1 méretét megduplázza.~~
+**RESOLVED (2026-06-18)**: Fleet-ágensek EN fordítása NEM Scope 1 feladata. A business-instance (külön marveen instance, EN alapnyelv) projektje. Scope 1 = Jocoo személyes HU-instance + install-time EN choice az alap Cuzcoo persona szintjén.
 
 **OQ2 -- Upstream Szotasz szinkron**: Marveen fork van a Szotasz/marveen-ből? Ha igen: ki felel az EN sync-ért upstream HU változáskor -- Kronk automatikus PR-ral, vagy Jocoo manuálisan? Kell-e CI pipeline a Szotasz repo watch-olásához?
 
