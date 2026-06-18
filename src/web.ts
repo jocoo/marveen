@@ -104,6 +104,7 @@ export function startWebServer(port = 3420): http.Server {
     const isPublicApi =
       (path === '/api/auth/status' && method === 'GET') ||
       (method === 'GET' && (
+        path === '/api/main-agent/avatar' ||
         path === '/api/marveen/avatar' ||
         /^\/api\/agents\/[^/]+\/avatar$/.test(path)
       ))

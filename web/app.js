@@ -13,6 +13,17 @@ function mainAgentId() {
   return window._marveen?.agentId || 'marveen'
 }
 
+// Single source of truth for the main-agent avatar URL. The canonical
+// endpoint is `/api/main-agent/avatar`; the legacy `/api/marveen/avatar`
+// still serves the same file for bookmarks / external links, so swapping
+// every call site here is purely a brand-cleanup, not a breaking change.
+// Pass `?ts` (typically Date.now()) when a cache-buster is needed; omit
+// it for cases where the URL is embedded in static metadata (icon links).
+function mainAgentAvatarUrl(ts) {
+  const base = '/api/main-agent/avatar'
+  return ts == null ? base : `${base}?t=${ts}`
+}
+
 (() => {
   const TOKEN_KEY = 'marveen-dashboard-token'
   const urlParams = new URLSearchParams(window.location.search)
@@ -1997,7 +2008,7 @@ async function openMarveenDetail() {
   document.getElementById('agentDetailTitle').textContent = displayName
   const avatar = document.getElementById('agentDetailAvatar')
   avatar.className = 'detail-avatar gradient-1'
-  avatar.innerHTML = `<img src="/api/marveen/avatar?t=${Date.now()}" alt="${escapeHtml(displayName)}">`
+  avatar.innerHTML = `<img src="${mainAgentAvatarUrl(Date.now())}" alt="${escapeHtml(displayName)}">`
   document.getElementById('agentDetailName').textContent = displayName
   document.getElementById('agentDetailDesc').textContent = m.description || ''
   document.getElementById('agentDetailModel').textContent = m.model || '-'
@@ -2155,7 +2166,7 @@ function renderAgents() {
     mCard.className = 'agent-card marveen-card'
     mCard.innerHTML = `
       <div class="agent-card-top">
-        <div class="agent-avatar gradient-1"><img src="/api/marveen/avatar?t=${Date.now()}" alt="${escapeHtml(displayName)}"></div>
+        <div class="agent-avatar gradient-1"><img src="${mainAgentAvatarUrl(Date.now())}" alt="${escapeHtml(displayName)}"></div>
         <div class="agent-card-info">
           <div class="agent-name">${escapeHtml(displayName)} <span class="marveen-badge">fo asszisztens</span></div>
           <div class="agent-desc">${escapeHtml(m.description || '')}</div>
@@ -2382,7 +2393,7 @@ document.getElementById('avatarChangeBtn').addEventListener('click', () => {
   gallery.hidden = !gallery.hidden
   if (!gallery.hidden) {
     const isMarveen = currentAgent && currentAgent.role === 'main'
-    const avatarEndpoint = isMarveen ? '/api/marveen/avatar' : `/api/agents/${encodeURIComponent(currentAgent.name)}/avatar`
+    const avatarEndpoint = isMarveen ? mainAgentAvatarUrl() : `/api/agents/${encodeURIComponent(currentAgent.name)}/avatar`
 
     const grid = document.getElementById('detailAvatarGrid')
     grid.innerHTML = ''
@@ -2399,7 +2410,7 @@ document.getElementById('avatarChangeBtn').addEventListener('click', () => {
           })
           if (!res.ok) throw new Error()
           showToast('Avatar frissítve')
-          const imgUrl = isMarveen ? `/api/marveen/avatar?t=${Date.now()}` : `/api/agents/${encodeURIComponent(currentAgent.name)}/avatar?t=${Date.now()}`
+          const imgUrl = isMarveen ? mainAgentAvatarUrl(Date.now()) : `/api/agents/${encodeURIComponent(currentAgent.name)}/avatar?t=${Date.now()}`
           document.getElementById('agentDetailAvatar').innerHTML = `<img src="${imgUrl}" alt="">`
           gallery.hidden = true
           loadAgents()
@@ -2466,14 +2477,14 @@ document.getElementById('avatarChangeBtn').addEventListener('click', () => {
   async function uploadAvatarFile(file) {
     if (!currentAgent) return
     const isMarveen = currentAgent.role === 'main'
-    const endpoint = isMarveen ? '/api/marveen/avatar' : `/api/agents/${encodeURIComponent(currentAgent.name)}/avatar`
+    const endpoint = isMarveen ? mainAgentAvatarUrl() : `/api/agents/${encodeURIComponent(currentAgent.name)}/avatar`
     const form = new FormData()
     form.append('avatar', file, file.name)
     try {
       const res = await fetch(endpoint, { method: 'POST', body: form })
       if (!res.ok) throw new Error()
       showToast('Avatar feltöltve, kép elküldve Telegramon')
-      const imgUrl = isMarveen ? `/api/marveen/avatar?t=${Date.now()}` : `/api/agents/${encodeURIComponent(currentAgent.name)}/avatar?t=${Date.now()}`
+      const imgUrl = isMarveen ? mainAgentAvatarUrl(Date.now()) : `/api/agents/${encodeURIComponent(currentAgent.name)}/avatar?t=${Date.now()}`
       document.getElementById('agentDetailAvatar').innerHTML = `<img src="${imgUrl}" alt="">`
       document.getElementById('detailAvatarGallery').hidden = true
       resetAvatarUpload()
@@ -4344,7 +4355,7 @@ const CADENCE_ICON = { 0: '⚡', 1: '☀️', 2: '📅', 3: '🗓️', 5: '•' 
 function makeScheduleRow(task) {
     const row = document.createElement('div')
     row.className = 'schedule-row'
-    const agent = scheduleAgents.find(a => a.name === task.agent) || { name: task.agent || mainAgentId(), avatar: '/api/marveen/avatar', label: task.agent || mainAgentId() }
+    const agent = scheduleAgents.find(a => a.name === task.agent) || { name: task.agent || mainAgentId(), avatar: mainAgentAvatarUrl(), label: task.agent || mainAgentId() }
 
     row.innerHTML = `
       <div class="schedule-agent-avatar">
@@ -4526,7 +4537,7 @@ function renderTimeline(tasks) {
   }
 
   for (const [agentName, agTasks] of Object.entries(agentTasks)) {
-    const agent = scheduleAgents.find(a => a.name === agentName) || { name: agentName, avatar: '/api/marveen/avatar', label: agentName }
+    const agent = scheduleAgents.find(a => a.name === agentName) || { name: agentName, avatar: mainAgentAvatarUrl(), label: agentName }
 
     const row = document.createElement('div')
     row.className = 'timeline-row'
@@ -4669,7 +4680,7 @@ function renderWeekView(data) {
       const count = tasks.length
 
       tasks.forEach((task, idx) => {
-        const agent = scheduleAgents.find(a => a.name === task.agent) || { name: task.agent || mainAgentId(), avatar: '/api/marveen/avatar' }
+        const agent = scheduleAgents.find(a => a.name === task.agent) || { name: task.agent || mainAgentId(), avatar: mainAgentAvatarUrl() }
 
         const card = document.createElement('div')
         card.className = 'week-task-card'
@@ -8051,7 +8062,7 @@ function renderTeamGraph(container, data) {
     const roleLabel = node.role === 'main' ? 'főügynök' : (node.role === 'leader' ? 'csapatvezető' : 'beosztott')
     const running = node.running ? '● Fut' : '○ Leállva'
     const avatarUrl = node.id === mainAgentId
-      ? `/api/marveen/avatar?t=${Date.now()}`
+      ? mainAgentAvatarUrl(Date.now())
       : `/api/agents/${encodeURIComponent(node.id)}/avatar?t=${Date.now()}`
     div.innerHTML = `
       <div class="team-node-avatar"><img src="${avatarUrl}" alt="${escapeHtml(node.label || node.id)}" onerror="this.style.display='none'"></div>
@@ -8189,7 +8200,7 @@ function chatAvatarHtml(agentName, size = 32) {
   const hasAvatar = chatAgentHasAvatar.get(lower)
   if (!hasAvatar) return chatMonogramEl(agentName, size)
   const src = lower === mainAgentId().toLowerCase()
-    ? `/api/marveen/avatar?t=${Date.now()}`
+    ? mainAgentAvatarUrl(Date.now())
     : `/api/agents/${encodeURIComponent(lower)}/avatar?t=${Date.now()}`
   return `<img class="chat-avatar" src="${src}" width="${size}" height="${size}" alt="${escapeHtml(agentName)}" data-agent-name="${escapeHtml(agentName)}" onerror="chatImgError(this)">`
 }
@@ -8656,7 +8667,7 @@ async function loadOverview() {
 async function initSidebarBrand() {
   try {
     const img = document.createElement('img')
-    img.src = '/api/marveen/avatar?t=' + Date.now()
+    img.src = mainAgentAvatarUrl(Date.now())
     img.onload = () => {
       const mark = document.getElementById('sidebarBrandMark')
       if (mark) { mark.textContent = ''; mark.appendChild(img) }

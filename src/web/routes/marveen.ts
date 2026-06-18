@@ -22,6 +22,65 @@ function getActiveMarveenModel(): string {
   return readActiveModelFromProjectDir(PROJECT_ROOT) ?? 'unknown'
 }
 
+// File-name root for the main agent's avatar. Used to be hardcoded
+// `marveen-avatar`, which leaked the upstream brand into a Cuzcoo-/Atlas-/
+// whatever-branded install. Now derived from MAIN_AGENT_ID so a fresh
+// install gets `<id>-avatar.<ext>` and the legacy `marveen-avatar.<ext>`
+// is only consulted via the lazy migration below.
+const MAIN_AGENT_AVATAR_BASENAME = `${MAIN_AGENT_ID}-avatar`
+const LEGACY_AVATAR_BASENAME = 'marveen-avatar'
+const AVATAR_EXTENSIONS = ['.png', '.jpg', '.jpeg', '.webp'] as const
+
+function mainAgentAvatarPath(ext: string): string {
+  return join(PROJECT_ROOT, 'store', `${MAIN_AGENT_AVATAR_BASENAME}${ext}`)
+}
+
+function legacyAvatarPath(ext: string): string {
+  return join(PROJECT_ROOT, 'store', `${LEGACY_AVATAR_BASENAME}${ext}`)
+}
+
+/**
+ * Lazy migration: if MAIN_AGENT_ID isn't 'marveen' and the legacy
+ * `marveen-avatar.<ext>` is the only file present, copy it to the new
+ * `${MAIN_AGENT_ID}-avatar.<ext>` path so future reads land on the canonical
+ * name. Done on the GET path rather than at boot so a degraded install
+ * (e.g. read-only store) still serves the legacy file without erroring out
+ * the dashboard's startup. Returns the absolute path of the file to serve,
+ * or null if no avatar is configured.
+ */
+export function findMainAgentAvatar(opts?: { copyOnMigrate?: boolean }): string | null {
+  const copyOnMigrate = opts?.copyOnMigrate ?? true
+  for (const ext of AVATAR_EXTENSIONS) {
+    const newP = mainAgentAvatarPath(ext)
+    if (existsSync(newP)) return newP
+  }
+  for (const ext of AVATAR_EXTENSIONS) {
+    const legacyP = legacyAvatarPath(ext)
+    if (!existsSync(legacyP)) continue
+    if (copyOnMigrate && MAIN_AGENT_ID !== 'marveen') {
+      try {
+        copyFileSync(legacyP, mainAgentAvatarPath(ext))
+        return mainAgentAvatarPath(ext)
+      } catch { /* fall through to legacy serve */ }
+    }
+    return legacyP
+  }
+  return null
+}
+
+// Clear BOTH naming patterns before a fresh upload, so a Cuzcoo install
+// doesn't end up with a stale `marveen-avatar.png` shadowing the new
+// `cuzcoo-avatar.png` on the next GET. Silent on missing files.
+function clearAllAvatarFiles(): void {
+  for (const ext of AVATAR_EXTENSIONS) {
+    for (const p of [mainAgentAvatarPath(ext), legacyAvatarPath(ext)]) {
+      if (existsSync(p)) {
+        try { unlinkSync(p) } catch { /* best effort */ }
+      }
+    }
+  }
+}
+
 // Pure identity-core of the /api/marveen payload: the brand-relevant fields the
 // dashboard chrome + agent routing depend on. Extracted so the mapping (display
 // name -> name, product brand -> brandName, canonical id -> agentId) is provable
@@ -145,25 +204,29 @@ export async function tryHandleMarveen(ctx: RouteContext, webDir: string): Promi
     return true
   }
 
-  if (path === '/api/marveen/avatar' && method === 'GET') {
-    for (const ext of ['.png', '.jpg', '.jpeg', '.webp']) {
-      const p = join(PROJECT_ROOT, 'store', `marveen-avatar${ext}`)
-      if (existsSync(p)) { serveFile(req, res, p); return true }
-    }
+  // Canonical (new) and legacy (brand-leaked) avatar GET. Both URLs serve
+  // the same file -- the canonical path is `/api/main-agent/avatar`, but
+  // bookmarks / external links / older dashboard builds still hit the
+  // legacy `/api/marveen/avatar`. Backwards-compat is intentional and
+  // open-ended (no plan to remove the legacy alias).
+  const isAvatarGet = (path === '/api/main-agent/avatar' || path === '/api/marveen/avatar') && method === 'GET'
+  if (isAvatarGet) {
+    const p = findMainAgentAvatar()
+    if (p) { serveFile(req, res, p); return true }
     const fallback = join(webDir, 'avatars', '01_robot.png')
     if (existsSync(fallback)) { serveFile(req, res, fallback); return true }
     res.writeHead(404); res.end()
     return true
   }
 
-  if (path === '/api/marveen/avatar' && method === 'POST') {
+  const isAvatarPost = (path === '/api/main-agent/avatar' || path === '/api/marveen/avatar') && method === 'POST'
+  if (isAvatarPost) {
     const body = await readBody(req)
     const contentType = req.headers['content-type'] || ''
 
-    for (const ext of ['.png', '.jpg', '.jpeg', '.webp']) {
-      const p = join(PROJECT_ROOT, 'store', `marveen-avatar${ext}`)
-      if (existsSync(p)) unlinkSync(p)
-    }
+    // Clear both naming patterns so a re-upload on a Cuzcoo install doesn't
+    // leave the legacy `marveen-avatar.png` behind to shadow the new file.
+    clearAllAvatarFiles()
 
     if (contentType.includes('application/json')) {
       const { galleryAvatar } = JSON.parse(body.toString()) as { galleryAvatar: string }
@@ -174,13 +237,13 @@ export async function tryHandleMarveen(ctx: RouteContext, webDir: string): Promi
       }
       const srcPath = join(webDir, 'avatars', galleryAvatar)
       if (!existsSync(srcPath)) { json(res, { error: 'Avatar not found' }, 404); return true }
-      const destPath = join(PROJECT_ROOT, 'store', `marveen-avatar${extname(galleryAvatar) || '.png'}`)
+      const destPath = mainAgentAvatarPath(extname(galleryAvatar) || '.png')
       copyFileSync(srcPath, destPath)
       sendMarveenAvatarChange(destPath).catch(() => {})
     } else {
       const { file } = parseMultipart(body, contentType)
       if (!file) { json(res, { error: 'No file uploaded' }, 400); return true }
-      const destPath = join(PROJECT_ROOT, 'store', `marveen-avatar${extname(file.name) || '.png'}`)
+      const destPath = mainAgentAvatarPath(extname(file.name) || '.png')
       writeFileSync(destPath, file.data)
       sendMarveenAvatarChange(destPath).catch(() => {})
     }

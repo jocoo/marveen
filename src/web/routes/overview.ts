@@ -9,6 +9,7 @@ import {
 import { readAgentTeam } from '../agent-team.js'
 import { isAgentRunning } from '../agent-process.js'
 import { json } from '../http-helpers.js'
+import { findMainAgentAvatar } from './marveen.js'
 import type { RouteContext } from './types.js'
 
 // Count "real" user turns (operator prompts, Telegram messages) in every
@@ -120,17 +121,18 @@ export async function tryHandleOverview(ctx: RouteContext): Promise<boolean> {
     activity.sort((a, b) => b.at - a.at)
 
     const agentsForTeam: Array<{ id: string; label: string; role: string; running: boolean; hasAvatar: boolean; avatarUrl: string }> = []
-    const mainHasAvatar = [
-      join(PROJECT_ROOT, 'store', 'marveen-avatar.png'),
-      join(PROJECT_ROOT, 'store', 'marveen-avatar.jpg'),
-    ].some(existsSync)
+    // findMainAgentAvatar resolves the brand-current name first
+    // (`${MAIN_AGENT_ID}-avatar.<ext>`) and falls back to the legacy
+    // `marveen-avatar.<ext>` for installs that haven't re-uploaded yet --
+    // so the overview's has-avatar dot stays lit during the migration window.
+    const mainHasAvatar = findMainAgentAvatar({ copyOnMigrate: false }) !== null
     agentsForTeam.push({
       id: MAIN_AGENT_ID,
       label: BOT_NAME,
       role: 'main',
       running: true,
       hasAvatar: mainHasAvatar,
-      avatarUrl: `/api/marveen/avatar`,
+      avatarUrl: `/api/main-agent/avatar`,
     })
     for (const a of subAgents) {
       const team = readAgentTeam(a)
