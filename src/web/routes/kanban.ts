@@ -49,6 +49,21 @@ export function kanbanMoveInstructions(id: string, target: string): string {
   ].join('\n')
 }
 
+// Decide whether a PUT body should trigger the kanban -> agent dispatch.
+// True iff the body explicitly sets `status` to "in_progress" AND the card
+// was not already in_progress. This mirrors the implicit gate the
+// POST /move endpoint has had since the dispatch hook was added: status
+// transitions INTO in_progress wake the assignee; lateral edits
+// (priority, assignee, title, ...) do not. The dispatched_at column is a
+// second once-only guard in fireKanbanDispatch itself, so a stale PUT can
+// never double-fire even if this helper returns true.
+//
+// Extracted so the decision is unit-testable without the HTTP / DB layer.
+export function shouldDispatchOnPut(beforeStatus: string | undefined | null, nextStatus: unknown): boolean {
+  if (nextStatus !== 'in_progress') return false
+  return beforeStatus !== 'in_progress'
+}
+
 // Option D: kanban -> agent dispatch. When a card moves to in_progress, wake the
 // assigned agent once via the inter-agent message router (createAgentMessage),
 // which gives retry / dedup / trust-wrapping / busy-receiver handling for free.
@@ -113,7 +128,17 @@ export async function tryHandleKanban(ctx: RouteContext): Promise<boolean> {
     const id = decodeURIComponent(kanbanCardMatch[1])
     const body = await readBody(req)
     const data = JSON.parse(body.toString())
-    if (updateKanbanCard(id, data)) { json(res, { ok: true }); return true }
+    // Snapshot status BEFORE the update so we can detect transitions into
+    // in_progress and wake the assignee. Scripts and sub-agents that move
+    // cards via PUT used to silently bypass dispatch (POST /move was the
+    // only path with the hook); incident 2026-06-18, #59 dispatched only
+    // after a planned-reset + /move retry.
+    const before = getKanbanCard(id)
+    if (updateKanbanCard(id, data)) {
+      if (shouldDispatchOnPut(before?.status, data?.status)) fireKanbanDispatch(id)
+      json(res, { ok: true })
+      return true
+    }
     json(res, { error: 'Kártya nem található' }, 404)
     return true
   }
