@@ -13,7 +13,7 @@ import {
 import { join } from 'node:path'
 import { execFileSync, execSync } from 'node:child_process'
 import type { Server as HttpServer } from 'node:http'
-import { STORE_DIR, PID_FILENAME, WEB_PORT, ALLOWED_CHAT_ID, MAIN_AGENT_ID, RESPAWN_ENABLED, HEARTBEAT_AGENT_ENABLED } from './config.js'
+import { STORE_DIR, PID_FILENAME, WEB_PORT, ALLOWED_CHAT_ID, MAIN_AGENT_ID, RESPAWN_ENABLED, HEARTBEAT_AGENT_ENABLED, PROJECT_ROOT } from './config.js'
 import { initDatabase } from './db.js'
 import { runDecaySweep, runDailyDigest } from './memory.js'
 import { initHeartbeat, stopHeartbeat } from './heartbeat.js'
@@ -55,12 +55,29 @@ const PID_FILE = join(STORE_DIR, PID_FILENAME)
 // hung socket. closeAllConnections (Node 18.2+) normally drains in ms, but
 // a browser tab holding a chunked response might still stall close().
 const SHUTDOWN_HARD_KILL_MS = 5000
-// Match own-UID node processes whose argv contains the dashboard binary
-// path, followed by whitespace or end-of-string. The delimiters are load-
-// bearing: without them, `\b` matched `dist/index.js.map`, `dist/index.js.bak`
-// and other sibling files, and unrelated editor/bundler processes touching
-// those files would get SIGKILLed on startup.
-const DASHBOARD_BINARY_PATTERN = /(?:^|[\s/])(?:dist\/index\.js|src\/index\.ts)(?:\s|$)/
+// Match own-UID node processes whose argv contains THIS dashboard's binary
+// path, anchored to PROJECT_ROOT. The leading anchor is load-bearing twice:
+//
+//  - Without the path prefix, any other node process whose argv contains
+//    `dist/index.js` matched -- notably gmail-mcp-server, claude-host, and
+//    any unrelated MCP server packaged the same way. Restart of this
+//    dashboard SIGTERM'd them all (incident 2026-06-17 19:09).
+//  - Without the trailing `(?:\s|$)`, `\b` matched `dist/index.js.map`,
+//    `dist/index.js.bak`, etc. -- editors/bundlers touching sibling files
+//    were getting SIGKILLed.
+//
+// Trade-off: the pattern only matches argvs that contain the absolute path
+// (`${PROJECT_ROOT}/dist/index.js`). A dev who launches with a bare relative
+// path (`cd marveen && node dist/index.js`) is not detected as a zombie --
+// fine, because that case never produced the systemd-restart bug we are
+// fixing.
+function buildDashboardBinaryPattern(root: string): RegExp {
+  const escaped = root.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  return new RegExp(
+    String.raw`(?:^|[\s/])` + escaped + String.raw`\/(?:dist\/index\.js|src\/index\.ts)(?:\s|$)`,
+  )
+}
+const DASHBOARD_BINARY_PATTERN = buildDashboardBinaryPattern(PROJECT_ROOT)
 
 // Build the I/O surface used by process-lock.ts. Kept here so the pure
 // module stays testable with a mock ctx and never imports node:child_process

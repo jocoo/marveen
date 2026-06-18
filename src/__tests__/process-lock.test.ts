@@ -610,14 +610,28 @@ describe('acquirePidfileLock', () => {
 // ---------------------------------------------------------------------------
 // DASHBOARD_BINARY_PATTERN correctness
 //
-// Regression: the first version used `/\b(dist\/index\.js|src\/index\.ts)\b/`,
-// which false-positive matched `dist/index.js.map`, `dist/index.js.bak`,
-// `dist/index.js.old`, etc. because `\b` after `.js` boundaries between the
-// 's' word-char and the next non-word '.'. The tightened form requires the
-// dashboard filename to be followed by whitespace or end-of-string so
-// editors/bundlers/watchers opening sibling files don't get SIGKILLed.
+// Regressions:
+//
+//   1. v1 used `/\b(dist\/index\.js|src\/index\.ts)\b/`. `\b` after `.js`
+//      false-matched `dist/index.js.map`, `dist/index.js.bak`, etc., so
+//      editors/bundlers touching sibling files were SIGKILLed.
+//
+//   2. v2 tightened the suffix to `(?:\s|$)` but had no path prefix, so any
+//      node process whose argv contained `dist/index.js` matched -- notably
+//      gmail-mcp-server and other MCP servers packaged with the canonical
+//      Node layout (`<server>/dist/index.js`). systemctl restart of the
+//      dashboard SIGTERM'd them all (incident 2026-06-17 19:09).
+//
+// v3 anchors to PROJECT_ROOT so only argvs containing THIS dashboard's
+// absolute install path match. The builder mirrors
+// `buildDashboardBinaryPattern` in src/index.ts; keep them in sync.
 
-const DASHBOARD_BINARY_PATTERN = /(?:^|[\s/])(?:dist\/index\.js|src\/index\.ts)(?:\s|$)/
+function buildDashboardBinaryPattern(root: string): RegExp {
+  const escaped = root.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  return new RegExp(
+    String.raw`(?:^|[\s/])` + escaped + String.raw`\/(?:dist\/index\.js|src\/index\.ts)(?:\s|$)`,
+  )
+}
 
 describe('writeBufferFully', () => {
   it('writes the whole buffer in a single shot when the writer accepts it all', () => {
@@ -666,24 +680,54 @@ describe('writeBufferFully', () => {
 })
 
 describe('DASHBOARD_BINARY_PATTERN', () => {
+  const ROOT = '/home/jocoo/marveen'
+  const PATTERN = buildDashboardBinaryPattern(ROOT)
+
   it.each([
-    'node dist/index.js',
-    '/usr/local/bin/node /opt/repo/dist/index.js',
-    'node --inspect dist/index.js',
-    'tsx src/index.ts',
-    'node dist/index.js --flag',
+    `/usr/bin/node ${ROOT}/dist/index.js`,
+    `node ${ROOT}/dist/index.js`,
+    `node --inspect ${ROOT}/dist/index.js`,
+    `tsx ${ROOT}/src/index.ts`,
+    `node ${ROOT}/dist/index.js --flag`,
   ])('matches the canonical dashboard argv: %s', (argv) => {
-    expect(DASHBOARD_BINARY_PATTERN.test(argv)).toBe(true)
+    expect(PATTERN.test(argv)).toBe(true)
   })
 
   it.each([
-    'vim dist/index.js.bak',
-    'node dist/index.js.map',
-    'tail dist/index.js.old',
-    'grep dist/index.jsx',
-    'sh -c "cp dist/index.js.tmp dist/index.js.staged"',
-    'prettier --write src/index.tsx',
+    `vim ${ROOT}/dist/index.js.bak`,
+    `node ${ROOT}/dist/index.js.map`,
+    `tail ${ROOT}/dist/index.js.old`,
+    `grep ${ROOT}/dist/index.jsx`,
+    `prettier --write ${ROOT}/src/index.tsx`,
+    `sh -c "cp ${ROOT}/dist/index.js.tmp ${ROOT}/dist/index.js.staged"`,
   ])('does NOT match unrelated argvs that merely contain the name as a prefix: %s', (argv) => {
-    expect(DASHBOARD_BINARY_PATTERN.test(argv)).toBe(false)
+    expect(PATTERN.test(argv)).toBe(false)
+  })
+
+  // Regression: gmail-mcp-server and other MCP servers ship as
+  // `<server>/dist/index.js`. The v2 pattern (no path anchor) matched these
+  // and `systemctl restart cuzcoo-dashboard` SIGTERM'd them along with the
+  // dashboard zombie. The PROJECT_ROOT anchor ends that.
+  it.each([
+    `node /home/jocoo/.local/share/gmail-mcp-server/dist/index.js --non-interactive`,
+    `node /opt/some-other-mcp/dist/index.js`,
+    `node /home/jocoo/marveen-old/dist/index.js`,        // sibling checkout, different root
+    `node /home/jocoo/marveenbackup/dist/index.js`,      // root prefix is not enough on its own
+    `tsx /home/jocoo/other-project/src/index.ts`,
+    `node dist/index.js`,                                // bare relative path: not from THIS install
+  ])('does NOT match foreign-root argvs (gmail-mcp-server class): %s', (argv) => {
+    expect(PATTERN.test(argv)).toBe(false)
+  })
+
+  it('treats PROJECT_ROOT segments with regex meta-characters literally', () => {
+    // Defensive: PROJECT_ROOT could in principle contain `.`, `+`, etc. if a
+    // user installs under e.g. `/home/jocoo/v1.0+rc/marveen`. The escaper
+    // must prevent those from being interpreted as regex syntax.
+    const trickyRoot = '/home/jocoo/v1.0+rc/marveen'
+    const trickyPattern = buildDashboardBinaryPattern(trickyRoot)
+    expect(trickyPattern.test(`node ${trickyRoot}/dist/index.js`)).toBe(true)
+    // Without escaping, `.` would match any char and `+` would be a
+    // quantifier -- so `vXX0Xrc` would otherwise match.
+    expect(trickyPattern.test('node /home/jocoo/vXX0Xrc/marveen/dist/index.js')).toBe(false)
   })
 })
