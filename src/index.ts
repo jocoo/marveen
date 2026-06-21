@@ -24,6 +24,7 @@ import { logger } from './logger.js'
 import { startInviteMonitor, stopInviteMonitor } from './web/channel-invites.js'
 import { ensureDiscordChannelGroup } from './web/discord-group-bootstrap.js'
 import { startChannelRequestWatcher, stopChannelRequestWatcher } from './web/channel-request-watcher.js'
+import { startStoreWatcher, stopStoreWatcher } from './store-watcher.js'
 import { AGENTS_BASE_DIR } from './web/agent-config.js'
 import {
   acquirePortLock,
@@ -370,6 +371,7 @@ const shutdown = (): void => {
     }
     try { stopInviteMonitor() } catch (err) { logger.warn({ err }, 'stopInviteMonitor threw during shutdown') }
     try { stopChannelRequestWatcher() } catch (err) { logger.warn({ err }, 'stopChannelRequestWatcher threw during shutdown') }
+    try { stopStoreWatcher() } catch (err) { logger.warn({ err }, 'stopStoreWatcher threw during shutdown') }
     if (decayInterval) clearInterval(decayInterval)
     if (digestTimer) clearTimeout(digestTimer)
     if (digestInterval) clearInterval(digestInterval)
@@ -504,6 +506,9 @@ async function main(): Promise<void> {
 
   // Slack channel request watcher (audit.jsonl -> pending_channel_requests).
   startChannelRequestWatcher()
+
+  // Store file audit watcher
+  startStoreWatcher()
 
   // Web dashboard
   webServer = startWebServer(WEB_PORT)
