@@ -243,6 +243,16 @@ export const SETTINGS_REGISTRY: SettingDefinition[] = [
     secret: false,
     requiresRestart: true,
   },
+  {
+    key: 'DASHBOARD_LANG',
+    type: 'string',
+    default: 'hu',
+    valueSet: ['hu', 'en'],
+    description: 'A dashboard alapértelmezett megjelenítési nyelve (hu = magyar, en = angol). A böngészőben mentett preferencia (localStorage) felülírja.',
+    module: 'system',
+    secret: false,
+    requiresRestart: false,
+  },
   // --- Heartbeat module (hot-reload via settings-store) ---
   {
     key: 'HEARTBEAT_START_HOUR',
@@ -318,6 +328,18 @@ export const SETTINGS_REGISTRY: SettingDefinition[] = [
     max: 1000000,
     description: 'Az audit napló összes forrásra vetített maximális bejegyzésszáma. Az API lekérések ennél soha nem adnak vissza többet (forrásanként egyéni limit: AUDIT_LOG_MAX_ENTRIES / 3).',
     module: 'audit',
+    secret: false,
+    requiresRestart: false,
+  },
+  // --- Token usage module ---
+  {
+    key: 'TOKEN_USAGE_RETENTION_DAYS',
+    type: 'int',
+    default: 90,
+    min: 7,
+    max: 3650,
+    description: 'A token-használati napló (token_usage tábla) megőrzési ideje napokban. A napi sweep ennél régebbi sorokat törli, így a tábla nem nő korlátlanul. A modell-javaslat csak az utolsó 30 napot nézi, így a 90 nap minden fogyasztónak bőven elég.',
+    module: 'system',
     secret: false,
     requiresRestart: false,
   },
