@@ -383,6 +383,19 @@ if ! npm run build --loglevel warn; then
 fi
 ok "$(_t macos.ts_built)"
 
+# Stamp the build-marker after a successful fresh-install build, mirroring the
+# update.sh self-heal (dist/.built-commit records the commit dist was built
+# from). On a build abort, fail()/the ERR-trap exit 1 BEFORE this line, so the
+# marker is only ever written for a complete dist -- it can never falsely
+# report a stale/partial dist as healthy. Stamping it here also keeps a later
+# update.sh run from a needless first-adoption self-healing rebuild (marker ==
+# HEAD on a fresh install). A failed rev-parse just leaves the marker absent,
+# which the update.sh self-heal then handles exactly as before (no regression).
+if [ -d "$INSTALL_DIR/dist" ]; then
+  _built_commit="$(git -C "$INSTALL_DIR" rev-parse HEAD 2>/dev/null || true)"
+  [ -n "$_built_commit" ] && printf '%s\n' "$_built_commit" > "$INSTALL_DIR/dist/.built-commit"
+fi
+
 INSTALL_STEP="configuration"
 # Step 6: Configuration
 echo ""
@@ -691,6 +704,63 @@ if ! command -v ffmpeg &>/dev/null; then
   brew install ffmpeg
 fi
 echo -e "$(_t macos.ffmpeg_done)"
+
+INSTALL_STEP="bumblebee"
+# Go + bumblebee (supply-chain scanner)
+echo ""
+echo -e "  Go + bumblebee (supply-chain scanner)..."
+
+_go_version_ok() {
+  command -v go &>/dev/null || return 1
+  local ver major minor
+  ver=$(go version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+' | head -1)
+  major=$(echo "$ver" | cut -d. -f1)
+  minor=$(echo "$ver" | cut -d. -f2)
+  [ "$major" -gt 1 ] || ( [ "$major" -eq 1 ] && [ "${minor:-0}" -ge 25 ] )
+}
+
+if _go_version_ok; then
+  echo -e "  ${GREEN}✓${NC} $(go version | grep -oE 'go[0-9]+\.[0-9.]+')"
+else
+  echo -e "  ${ORANGE}!${NC} Go >= 1.25 szukseges -- telepites (brew install go)..."
+  if command -v brew &>/dev/null; then
+    # set -e + trap ERR van eletben: brew bukasa NE allitsa le a telepitest,
+    # csak hagyja ki bumblebee-t (a _go_version_ok ujra-ellenoriz lentebb).
+    if brew install go; then
+      # Frissitjuk a PATH-ot az uj Go binary-re
+      export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
+    else
+      echo -e "  ${ORANGE}!${NC} Go telepites sikertelen -- bumblebee kihagyva."
+    fi
+  else
+    echo -e "  ${RED}✗${NC} Homebrew nem elerheto; bumblebee nem telepitheto automatikusan."
+    echo -e "  ${DIM}  Kezzel: https://go.dev/dl (>= 1.25)${NC}"
+  fi
+fi
+
+BUMBLEBEE_BIN="$HOME/.local/bin/bumblebee"
+if [ -x "$BUMBLEBEE_BIN" ]; then
+  echo -e "  ${GREEN}✓${NC} bumblebee mar telepitve ($BUMBLEBEE_BIN)"
+elif _go_version_ok; then
+  echo -e "  bumblebee build forrasbol (github.com/perplexityai/bumblebee)..."
+  mkdir -p "$HOME/.local/bin"
+  _BB_TMP=$(mktemp -d)
+  if git clone -q --depth 1 --branch v0.1.2 https://github.com/perplexityai/bumblebee.git "$_BB_TMP" 2>/dev/null; then
+    if (cd "$_BB_TMP" && go build -o "$BUMBLEBEE_BIN" ./cmd/bumblebee 2>/dev/null); then
+      chmod +x "$BUMBLEBEE_BIN"
+      echo -e "  ${GREEN}✓${NC} bumblebee telepitve: $BUMBLEBEE_BIN"
+    else
+      echo -e "  ${ORANGE}!${NC} bumblebee build sikertelen -- a supply-chain scan kihagyja a binart."
+      echo -e "  ${DIM}  Kezzel: cd /tmp/bb && go build -o ~/.local/bin/bumblebee ./cmd/bumblebee${NC}"
+    fi
+  else
+    echo -e "  ${ORANGE}!${NC} bumblebee clone sikertelen (halozat?) -- kihagyva."
+  fi
+  rm -rf "$_BB_TMP"
+else
+  echo -e "  ${ORANGE}!${NC} Go nem elerheto -- bumblebee kihagyva. A supply-chain scan atlepve."
+  echo -e "  ${DIM}  Kezzel: brew install go && git clone https://github.com/perplexityai/bumblebee /tmp/bb && (cd /tmp/bb && go build -o ~/.local/bin/bumblebee ./cmd/bumblebee)${NC}"
+fi
 
 INSTALL_STEP="launchagent"
 # Step 7: LaunchAgent setup

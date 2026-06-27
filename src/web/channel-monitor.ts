@@ -10,6 +10,7 @@ import {
   agentHasChannel,
   agentSessionName,
   capturePane,
+  captureParkedInputView,
   clearInputBuffer,
   dismissResumeSummaryModalIfPresent,
   isAgentRunning,
@@ -25,7 +26,9 @@ import {
   detectPaneState, decidePaneErrorAlert, detectsBlockingMenu, type PaneErrorAlertState, type PaneState,
   stuckInputSignature, decideStuckInputRecovery, parkedChannelInput,
   parkedInputText, shouldClearTruncatedPreamble,
-  type StuckInputState, type StuckInputThresholds,
+  parkedInputRowCount, submitLanded, decideStuckInputAction,
+  type StuckInputState, type StuckInputThresholds, type StuckInputAction,
+  type StuckInputActionFacts,
 } from '../pane-state.js'
 import { MAIN_CHANNELS_SESSION, MAIN_CHANNELS_PLIST } from './main-agent.js'
 import { notifyChannel } from '../notify.js'
@@ -111,6 +114,64 @@ const MAIN_STUCK_THRESHOLDS: StuckInputThresholds = {
   maxAttempts: 4,
 }
 
+// --- Stuck-input hard-restart escalation (reliable backstop) ---
+// When the soft recovery above (Enter + clear+re-inject) is EXHAUSTED but the
+// main channel input is STILL parked, the TUI is hard-wedged: a paste
+// placeholder that Enter only expands (never submits), or a state where
+// keystrokes no longer register. Soft recovery cannot win there; the only fix
+// is a fresh claude process. Escalate to hardRestartMarveenChannels()
+// (respawn-pane on Linux -- replaces ONLY the main pane's claude, the tmux
+// server + every other agent session stay intact). Rate-limited + capped so a
+// wedge a restart cannot clear never becomes a restart loop.
+const STUCK_RESTART_MIN_INTERVAL_MS = 5 * 60 * 1000
+const STUCK_RESTART_MAX_CONSECUTIVE = 3
+let stuckRestartCount = 0
+let lastStuckRestartAt = 0
+
+// Pure decision for the stuck-input restart escalation.
+//   'restart' -> soft recovery exhausted + input still parked + rate-limit ok
+//   'alert'   -> restarts are not clearing the wedge (cap reached) -> surface once
+//   'skip'    -> not wedged past soft recovery, rate-limited, or already alerted
+export function decideStuckInputRestart(
+  parked: boolean,
+  attempts: number,
+  maxAttempts: number,
+  now: number,
+  lastRestartAt: number,
+  restartCount: number,
+  minIntervalMs: number,
+  maxConsecutive: number,
+): 'restart' | 'alert' | 'skip' {
+  if (!parked || attempts < maxAttempts) return 'skip'
+  if (now - lastRestartAt < minIntervalMs) return 'skip'
+  if (restartCount >= maxConsecutive) return restartCount === maxConsecutive ? 'alert' : 'skip'
+  return 'restart'
+}
+
+// Busy-guard over the stuck-input restart decision (false-positive fix,
+// 2026-06-26). #452 hard-restarted (respawn-pane / launchctl reload) the main
+// session as soon as a parked input survived ~4 soft-recovery ticks -- but a
+// parked inbound message is the NORMAL transient case: the channel plugin drops
+// it into the prompt box and the Claude TUI, in raw mode, frequently swallows
+// the auto-submit Enter, so the same text sits 'typing' across several ticks
+// until soft recovery (Enter / clear+re-inject) finally submits it. The hard
+// restart pre-empted that recovery with a sledgehammer that destroyed the live
+// conversation (~10 reloads in 12h, each losing context).
+//
+// Defer the restart whenever the pane is busy OR holds parked input it is still
+// actively recovering ('typing') -- give soft recovery time to submit instead
+// of nuking the session. A session that is genuinely DEAD (not even soft-
+// recovering) is still caught by the keepalive-staleness watchdog (~18min), the
+// pre-#452 backstop. This narrows the hard restart to unreadable/error panes and
+// leaves the routine parked-input case to the non-destructive soft path.
+// Reuses shouldDeferKeepaliveRespawn (single source of truth for busy/typing).
+export function applyStuckRestartBusyGuard(
+  paneState: PaneState | null,
+  decision: 'restart' | 'alert' | 'skip',
+): 'restart' | 'alert' | 'skip' {
+  return shouldDeferKeepaliveRespawn(paneState) ? 'skip' : decision
+}
+
 // Session-agnostic stuck-input recovery: capture the pane, and if a channel
 // notification is parked at the ❯ prompt, get it SUBMITTED (Enter-first, then
 // clear + verbatim re-inject of the COMPLETE block). The gate fires ONLY for a
@@ -133,54 +194,98 @@ export function recoverStuckInputForSession(
   thresholds: StuckInputThresholds,
   allowPlainReinject: boolean,
 ): StuckInputState {
-  const pane = capturePane(session)
+  // Ghost-stripped capture: a dim autocomplete hint in an empty box must NOT
+  // read as parked input, or the recovery below would re-type + submit it
+  // (phantom prompt-injection). See captureParkedInputView / stripGhostSuggestion.
+  const pane = captureParkedInputView(session)
   const sig = pane != null ? stuckInputSignature(pane) : null
   const decision = decideStuckInputRecovery(sig, prev, Date.now(), thresholds)
   if (decision.recover && pane != null) {
     const attempt = decision.next.attempts
-    const escalate = attempt > MAIN_STUCK_ENTER_ATTEMPTS
     const block = parkedChannelInput(pane)
-    if (escalate && block != null && block.complete && block.block != null) {
-      logger.warn({ session, chatId: block.chatId, attempt }, 'Stuck channel input -- escalating to clear + verbatim re-inject')
-      try {
-        clearInputBuffer(session)
-        sendPromptToSession(session, block.block)
-      } catch (err) {
-        logger.warn({ err, session }, 'Stuck-input re-inject failed')
-      }
-    } else if (escalate && shouldClearTruncatedPreamble(pane)) {
-      logger.warn({ session, attempt }, 'Stuck input -- truncated safety preamble, clearing buffer (no re-inject)')
-      try {
-        clearInputBuffer(session)
-      } catch (err) {
-        logger.warn({ err, session }, 'Stuck-input preamble clear failed')
-      }
-    } else if (escalate && allowPlainReinject && block == null) {
-      const text = parkedInputText(pane)
-      if (text != null) {
-        logger.warn({ session, attempt }, 'Stuck input (non-channel) -- escalating to clear + re-inject parked text')
-        try {
-          clearInputBuffer(session)
-          sendPromptToSession(session, text)
-        } catch (err) {
-          logger.warn({ err, session }, 'Stuck-input plain re-inject failed')
-        }
-      } else {
-        try { execFileSync(TMUX, ['send-keys', '-t', session, 'Enter'], { timeout: 5000 }) } catch { /* no-op */ }
-      }
-    } else {
-      // Enter-first, and the truncation-guard fallback: if escalation was due
-      // but the <channel> block looks incomplete, hold on Enter instead.
-      const heldForTruncation = escalate && block != null && !block.complete
-      logger.warn({ session, attempt, heldForTruncation }, 'Stuck input -- recovery Enter')
-      try {
-        execFileSync(TMUX, ['send-keys', '-t', session, 'Enter'], { timeout: 5000 })
-      } catch (err) {
-        logger.warn({ err, session }, 'Stuck-input recovery Enter failed')
-      }
+    // Gather the parked-input facts and let the pure decision choose the move.
+    // The decision NEVER bare-Enters a multi-row box (that inserts a newline
+    // and corrupts the message) and prefers a chat_id-safe re-inject; the
+    // truncation-guard (no verbatim re-inject of an incomplete <channel> block)
+    // is preserved via blockTruncated.
+    const facts: StuckInputActionFacts = {
+      escalate: attempt > MAIN_STUCK_ENTER_ATTEMPTS,
+      rowCount: parkedInputRowCount(pane),
+      blockComplete: block != null && block.complete && block.block != null,
+      blockTruncated: block != null && !block.complete,
+      truncatedPreamble: shouldClearTruncatedPreamble(pane),
+      allowPlainReinject,
+      hasPlainText: allowPlainReinject && parkedInputText(pane) != null,
     }
+    const action = decideStuckInputAction(facts)
+    performStuckInputAction(session, action, pane, block, sig, attempt)
   }
   return decision.next
+}
+
+// Execute a stuck-input recovery action and verify it landed. The action is
+// chosen by the pure decideStuckInputAction(); this does only the tmux side-
+// effect plus POST-SUBMIT VERIFICATION (re-capture + submitLanded), so a move
+// that did NOT clear the parked text is logged and the next tick escalates
+// within the attempts budget (decideStuckInputRecovery caps it). 'hold' and
+// 'clear-preamble' submit nothing, so there is nothing to verify there.
+function performStuckInputAction(
+  session: string,
+  action: StuckInputAction,
+  paneBefore: string,
+  block: ReturnType<typeof parkedChannelInput>,
+  prevSig: string | null,
+  attempt: number,
+): void {
+  let submitted = false
+  try {
+    switch (action) {
+      case 'reinject-block':
+        logger.warn({ session, chatId: block?.chatId, attempt }, 'Stuck channel input -- clear + verbatim re-inject')
+        clearInputBuffer(session)
+        sendPromptToSession(session, block!.block!)
+        submitted = true
+        break
+      case 'reinject-plain': {
+        const text = parkedInputText(paneBefore)
+        if (text != null) {
+          logger.warn({ session, attempt }, 'Stuck input (non-channel) -- clear + re-inject parked text')
+          clearInputBuffer(session)
+          sendPromptToSession(session, text)
+        } else {
+          execFileSync(TMUX, ['send-keys', '-t', session, 'Enter'], { timeout: 5000 })
+        }
+        submitted = true
+        break
+      }
+      case 'clear-preamble':
+        logger.warn({ session, attempt }, 'Stuck input -- truncated safety preamble, clearing buffer (no re-inject)')
+        clearInputBuffer(session)
+        break
+      case 'enter':
+        execFileSync(TMUX, ['send-keys', '-t', session, 'Enter'], { timeout: 5000 })
+        submitted = true
+        break
+      case 'hold':
+        logger.warn({ session, attempt }, 'Stuck input -- multi-row/truncated, holding (no bare-Enter; awaiting keystroke fix)')
+        break
+    }
+  } catch (err) {
+    logger.warn({ err, session, action }, 'Stuck-input recovery action failed')
+    return
+  }
+  if (submitted) {
+    // submitLanded() handles a null capture internally (-> not landed). prevSig
+    // is non-null here in practice (recover only fires on a parked signature),
+    // but guard the type narrowing explicitly.
+    const landed = prevSig != null ? submitLanded(prevSig, captureParkedInputView(session)) : false
+    logger.warn(
+      { session, action, attempt, landed },
+      landed
+        ? 'Stuck input -- recovery action landed'
+        : 'Stuck input -- recovery action did NOT land (escalating next tick within budget)',
+    )
+  }
 }
 
 // Periodic detached-channel-claude reap (CB6CF755 durable fix). The pane-
@@ -593,6 +698,49 @@ export function hardRestartMarveenChannels(): { ok: boolean; error?: string } {
   return { ok: false, error: 'hard restart failed: tmux respawn-pane failed' }
 }
 
+// Escalate a main channel input that survived the full soft recovery to a hard
+// restart (respawn-pane). Driven by the pure decideStuckInputRestart; this
+// wrapper owns the I/O + counters. Called once per monitor tick right after the
+// main stuck-input recovery.
+function maybeRestartWedgedMainChannel(state: StuckInputState): void {
+  const parked = state.parkedSig !== null
+  // A cleared input box ends the spell -> reset the escalation counter so the
+  // next genuine wedge starts fresh (and a successful restart is not penalised).
+  if (!parked) { stuckRestartCount = 0; return }
+  // Busy-guard: never hard-restart while the main pane is actively generating --
+  // a parked <channel> block then is a busy session, not a wedge. See
+  // applyStuckRestartBusyGuard. detectPaneState reads 'unknown' for an
+  // unreadable pane and the guard fails-open on that, so a broken capture never
+  // blocks a genuine recovery.
+  const paneContent = capturePane(MAIN_CHANNELS_SESSION)
+  const paneState = paneContent != null ? detectPaneState(paneContent) : null
+  const action = applyStuckRestartBusyGuard(paneState, decideStuckInputRestart(
+    parked, state.attempts, MAIN_STUCK_THRESHOLDS.maxAttempts,
+    Date.now(), lastStuckRestartAt, stuckRestartCount,
+    STUCK_RESTART_MIN_INTERVAL_MS, STUCK_RESTART_MAX_CONSECUTIVE,
+  ))
+  if (action === 'skip' && shouldDeferKeepaliveRespawn(paneState)) {
+    logger.info({ paneState, attempts: state.attempts }, 'Stuck-input restart deferred -- main pane is busy (working, not wedged)')
+  }
+  if (action === 'skip') return
+  if (action === 'alert') {
+    logger.error({ session: MAIN_CHANNELS_SESSION }, 'Stuck main channel input survived max restart escalations -- manual intervention needed')
+    sendAlert(`⛔ A ${MAIN_CHANNELS_SESSION} bemenete beragadt es ${STUCK_RESTART_MAX_CONSECUTIVE} automatikus respawn-pane sem szabaditotta ki. Kezi beavatkozas kell: inditsd ujra a ${SERVICE_ID}-channels szolgaltatast.`)
+    stuckRestartCount++ // tick past the cap so the alert fires only once
+    return
+  }
+  logger.warn({ session: MAIN_CHANNELS_SESSION, attempts: state.attempts, restart: stuckRestartCount + 1 }, 'Stuck main channel input survived soft recovery -- escalating to hard restart (respawn-pane)')
+  const r = hardRestartMarveenChannels()
+  lastStuckRestartAt = Date.now()
+  if (r.ok) {
+    stuckRestartCount++
+    // Reset the tracker so the fresh post-restart pane is re-evaluated cleanly.
+    mainStuckInput = { parkedSig: null, firstSeenAt: null, lastRecoverAt: null, attempts: 0 }
+  } else {
+    logger.error({ session: MAIN_CHANNELS_SESSION, err: r.error }, 'Stuck-input hard restart failed')
+  }
+}
+
 // --- Keep-alive staleness watchdog (deafness safety net, decision #3) ---
 //
 // The keep-alive (a scheduled edit_message round-trip from the channels
@@ -978,6 +1126,10 @@ export function startChannelPluginMonitor(): NodeJS.Timeout | null {
     // only when the captured block looks COMPLETE -- a truncated capture stays
     // on Enter rather than risk a partial re-inject to the wrong chat_id.
     mainStuckInput = recoverStuckInputForSession(MAIN_CHANNELS_SESSION, mainStuckInput, MAIN_STUCK_THRESHOLDS, false)
+    // Reliable backstop: if the soft recovery is exhausted and the input is
+    // STILL parked, the TUI is hard-wedged -- escalate to a respawn-pane (the
+    // automated form of the manual `systemctl restart channels`). Rate-limited.
+    maybeRestartWedgedMainChannel(mainStuckInput)
     // Same recovery for every running sub-agent session: a parked channel
     // message wedges a sub-agent ("nem válaszol") exactly as it would the main
     // session. Per-session state lives in agentStuckInput; drop it once the

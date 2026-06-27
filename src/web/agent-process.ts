@@ -10,8 +10,11 @@ import {
   decideSubmitFollowup,
   shouldClearTruncatedPreamble,
   detectsPastePlaceholder,
+  detectPaneState,
+  parkedInputText,
+  stripGhostSuggestion,
 } from '../pane-state.js'
-import { agentDir, readAgentModel, readAgentSecurityProfile, readAgentClaudeConfigDir, readAgentChannelProvider, readAgentAuthMode, readAgentDisplayName, readAgentRemoteConfig, readAgentRemoteHost } from './agent-config.js'
+import { agentDir, readAgentModel, readAgentClaudeConfigDir, readAgentChannelProvider, readAgentAuthMode, readAgentDisplayName, readAgentRemoteConfig, readAgentRemoteHost } from './agent-config.js'
 import {
   buildTmuxInvocation,
   buildSshExec,
@@ -28,7 +31,9 @@ import { parseTelegramToken } from './telegram.js'
 import { getProvider, getProviderType, channelStateDir, readChannelToken, type ChannelProviderType } from '../channel-provider.js'
 import { CHANNEL_PROVIDER, MAIN_AGENT_ID } from '../config.js'
 import { loadProfileTemplate } from './profiles.js'
+import { resolveAgentSecurityProfile } from './agent-team.js'
 import { writeAgentSettingsFromProfile } from './agent-scaffold.js'
+import { schedulePluginUnlockAfterRespawn } from './channel-plugin-unlock.js'
 import { getSecret } from './vault.js'
 import { reapChannelOrphans, reapDetachedChannelClaudes } from './channel-poller-reap.js'
 
@@ -305,9 +310,16 @@ export function startAgentProcess(name: string, opts: { fresh?: boolean } = {}):
     const isClaude = model.startsWith('claude-')
     const isDeepseek = model.startsWith('deepseek-')
     const isOllama = !isClaude && !isDeepseek
-    const ollamaEnv = isOllama ? `export ANTHROPIC_AUTH_TOKEN=ollama && export ANTHROPIC_BASE_URL=${OLLAMA_URL} && ` : ''
+    // ANTHROPIC_MODEL is REQUIRED for non-Claude models: the interactive TUI
+    // validates the `--model` flag against known Anthropic models and silently
+    // falls back to the built-in default (claude-opus-...) for an unrecognized
+    // value like `qwen3.6:27b` or `deepseek-v4-pro` -- which then errors against
+    // the custom ANTHROPIC_BASE_URL ("model does not exist"). The env var is
+    // authoritative and bypasses that validation. (`--print` honors --model, but
+    // the agents run the TUI.) Single-quoted so a `:` in the tag is shell-safe.
+    const ollamaEnv = isOllama ? `export ANTHROPIC_AUTH_TOKEN=ollama && export ANTHROPIC_BASE_URL=${OLLAMA_URL} && export ANTHROPIC_MODEL='${model}' && ` : ''
     const deepseekKey = isDeepseek ? (getSecret('DEEPSEEK_API_KEY') ?? '') : ''
-    const deepseekEnv = isDeepseek ? `export ANTHROPIC_AUTH_TOKEN="${deepseekKey}" && export ANTHROPIC_BASE_URL=https://api.deepseek.com/anthropic && ` : ''
+    const deepseekEnv = isDeepseek ? `export ANTHROPIC_AUTH_TOKEN="${deepseekKey}" && export ANTHROPIC_BASE_URL=https://api.deepseek.com/anthropic && export ANTHROPIC_MODEL='${model}' && ` : ''
     // When authMode is 'api', the agent uses its own ANTHROPIC_API_KEY from
     // the vault instead of the host's OAuth. The vault entry ID follows the
     // convention `agent-{name}-api-key`. We inject it as an env var so Claude
@@ -322,7 +334,11 @@ export function startAgentProcess(name: string, opts: { fresh?: boolean } = {}):
     // Apply security profile: write allow/deny list into settings.json, and
     // skip the dangerously-skip-permissions flag for strict profiles so
     // Claude Code enforces the list rather than bypassing it.
-    const profile = loadProfileTemplate(readAgentSecurityProfile(name))
+    // Role-derived applier-pool: an explicit non-default profile wins, else a
+    // `leader` (tech-lead) -> 'applier' (Supabase retained), everyone else ->
+    // 'default' (deny-by-default). Keeps a fresh install's tech-lead an applier
+    // without hardcoding agent names.
+    const profile = loadProfileTemplate(resolveAgentSecurityProfile(name))
     writeAgentSettingsFromProfile(name, profile)
     // A sub-agent must load ONLY its own channel plugin. The user-scope
     // enabledPlugins would otherwise make EVERY sub-agent spawn a telegram
@@ -396,9 +412,34 @@ export function startAgentProcess(name: string, opts: { fresh?: boolean } = {}):
       ? `export ${stateEnvVar}="${agentChannelDir}"${auditLogEnv} && `
       : ''
     const channelFlag = hasChannel ? `--channels plugin:${provider.pluginId}` : ''
+    // Channel-plugin MCP-registration guard (2026-06-23): the telegram/slack/etc.
+    // channel plugin registers as a stdio MCP server loaded via --channels. Claude
+    // Code connects stdio MCP servers in batches of MCP_SERVER_CONNECTION_BATCH_SIZE
+    // (default 3); when an agent ALSO runs a slow local .mcp.json stdio server
+    // (e.g. google-workspace/workspace-mcp, which spends seconds on OAuth + Google
+    // API init) plus many claude.ai connectors, the channel plugin gets starved
+    // out of the startup batch / hits MCP_TIMEOUT and never registers -- no /mcp
+    // entry, no bun poller, dead bot (observed: balazsmarveenja with workspace-mcp
+    // had NO telegram; removing workspace-mcp restored it). Raise the stdio batch
+    // size and per-server timeout, and force non-blocking startup, so a slow local
+    // MCP can never crowd the channel plugin out of registration. Only set for
+    // channel-having agents (channel-less agents have no plugin to protect).
+    const mcpEnv = hasChannel
+      ? 'export MCP_SERVER_CONNECTION_BATCH_SIZE=10 && export MCP_CONNECTION_NONBLOCKING=1 && export MCP_TIMEOUT=60000 && '
+      : ''
+    // Disable Claude Code's history-based prompt suggestions -- the DIM (ANSI
+    // SGR-2 faint) ghost-text of a previous prompt that Claude shows in an empty
+    // input box. The stuck-input recovery scrapes the pane with `capture-pane -p`
+    // (no colour), so it cannot tell a dim ghost suggestion apart from REAL
+    // parked input and re-submits the suggestion as a command. That is the root
+    // of the 2026-06-26 phantom-injection incident: a stale "Sztornózd" ghost was
+    // re-submitted and cancelled a live invoice; an earlier ghost emailed a family
+    // member. Killing the suggestion at the source removes the ghost the recovery
+    // misreads. Env var verified present in claude.exe (CLAUDE_CODE_ENABLE_*).
+    const promptSuggestionEnv = 'export CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false && '
     // Single-quote `${model}` so values like `claude-opus-4-8[1m]` (1M-context
     // suffix) are not glob-expanded by the shell that tmux spawns the command in.
-    const cmd = `export PATH="/opt/homebrew/bin:$HOME/.bun/bin:/usr/local/bin:/usr/bin:/bin:$PATH" && ${unsetTokens} && ${channelSetup}${apiKeyEnv}${claudeConfigEnv}${ollamaEnv}${deepseekEnv}cd "${dir}" && ${CLAUDE} ${continueFlag}${skipFlag}--model '${model}' ${channelFlag}`.trimEnd()
+    const cmd = `export PATH="/opt/homebrew/bin:$HOME/.bun/bin:/usr/local/bin:/usr/bin:/bin:$PATH" && ${unsetTokens} && ${promptSuggestionEnv}${mcpEnv}${channelSetup}${apiKeyEnv}${claudeConfigEnv}${ollamaEnv}${deepseekEnv}cd "${dir}" && ${CLAUDE} ${continueFlag}${skipFlag}--model '${model}' ${channelFlag}`.trimEnd()
     runTmux(null, ['new-session', '-d', '-s', session, cmd], { timeout: 10000 })
 
     logger.info({ name, session, channelDir: agentChannelDir }, 'Agent tmux session started')
@@ -418,6 +459,21 @@ export function startAgentProcess(name: string, opts: { fresh?: boolean } = {}):
     // sessions can also be present, so dismiss both. Errors are swallowed
     // -- the outbound pre-flight remains the safety net if this misses.
     scheduleIdentitySetup(session, readAgentDisplayName(name))
+
+    // Colleague auto-unlock (2026-06-22): mirror the main session's
+    // post-respawn unlock probe for channel-having sub-agents. After a restart
+    // the bun channel poller sometimes never attaches during the cold-start
+    // window (observed fleet-wide after a managed restart: the TUI comes up but
+    // bot.pid stays empty, so the agent goes deaf to inbound). The main session
+    // self-heals because channel-monitor schedules schedulePluginUnlockAfterRespawn;
+    // sub-agents had no such probe and stayed stuck until a manual /mcp kick.
+    // Schedule the same probe here. It is gated on bun-absence (a healthy poller
+    // is left untouched) and on an idle pane, so it never disturbs a colleague
+    // mid-turn. Channel-less agents (hasChannel false) get no probe; MAIN never
+    // takes this path (it comes up via channels.sh) but guard defensively.
+    if (hasChannel && name !== MAIN_AGENT_ID) {
+      schedulePluginUnlockAfterRespawn(session, provider.type)
+    }
 
     return { ok: true }
   } catch (err) {
@@ -861,6 +917,23 @@ export function capturePane(session: string, host: string | null = null): string
   }
 }
 
+// Capture a pane for STUCK-INPUT detection, with the editor's dim "ghost
+// suggestion" autocomplete removed. Captures WITH colour (`-e`) and strips the
+// SGR-2 (dim) ghost + all ANSI, so a hint shown in an empty input box is never
+// mistaken for a genuinely parked input. Every auto-submitting recovery path
+// (channel-monitor recoverStuckInputForSession, stuck-input-watcher
+// bareEnterRecovery) MUST read the pane through THIS, not plain capturePane --
+// otherwise the dim ghost reads as real text and gets re-typed + Enter-
+// submitted (phantom prompt-injection, 2026-06-26). Returns null on capture
+// failure (treated as "nothing parked"), matching capturePane's contract.
+export function captureParkedInputView(session: string, host: string | null = null): string | null {
+  try {
+    return stripGhostSuggestion(captureTmux(host, ['capture-pane', '-t', session, '-e', '-p']))
+  } catch {
+    return null
+  }
+}
+
 // Check if a Claude Code tmux session is ready to accept a new prompt.
 //
 // The detection has two layers, both needed to close the frame-level
@@ -889,5 +962,41 @@ export function isSessionReadyForPrompt(session: string, host: string | null = n
   const second = capturePane(session, host)
   if (second == null) return false
   return paneLooksIdle(second)
+}
+
+// How long to wait between the two parked-input captures when deciding whether
+// the input box is STUCK (stale) vs being actively typed. Identical parked text
+// across this gap means nobody is typing -> it is a stranded artifact.
+const PARKED_STABLE_CONFIRM_S = '2'
+// Settle after a Ctrl-U so the next capture reflects the cleared box.
+const PARKED_CLEAR_SETTLE_S = '0.3'
+// Bound the Ctrl-U presses for a (possibly multi-line) stale parked input.
+const PARKED_CLEAR_MAX = 3
+
+// Un-wedge a session whose input box holds STALE parked text: a non-submitted
+// line (e.g. a weak local model that typed its heartbeat reply into the box
+// instead of ending the turn). Parked text makes isSessionReadyForPrompt()
+// false forever, so every inbound message strands as pending and the channel
+// goes silent with no recovery. Acts ONLY when the pane is 'typing' (idle WITH
+// parked text -- never 'busy'/processing) AND the text is unchanged across a
+// short settle, so input a human or agent is actively typing is never clobbered.
+// Returns true if it cleared something (caller should retry delivery next tick).
+export function clearStaleParkedInput(session: string, host: string | null = null): boolean {
+  const a = capturePane(session, host)
+  if (a == null || detectPaneState(a) !== 'typing') return false
+  const parked = parkedInputText(a)
+  if (!parked) return false
+  try { execFileSync('/bin/sleep', [PARKED_STABLE_CONFIRM_S], { timeout: 4000 }) } catch { /* best effort */ }
+  const b = capturePane(session, host)
+  // Changed (someone is typing) or already cleared -> leave it alone.
+  if (b == null || detectPaneState(b) !== 'typing' || parkedInputText(b) !== parked) return false
+  for (let i = 0; i < PARKED_CLEAR_MAX; i++) {
+    runTmux(host, ['send-keys', '-t', session, 'C-u'], { timeout: 5000 })
+    try { execFileSync('/bin/sleep', [PARKED_CLEAR_SETTLE_S], { timeout: 2000 }) } catch { /* best effort */ }
+    const after = capturePane(session, host)
+    if (after == null || detectPaneState(after) !== 'typing') break
+  }
+  logger.warn({ session, parked: parked.slice(0, 60) }, 'message-router: cleared stale parked input (channel un-wedge)')
+  return true
 }
 
