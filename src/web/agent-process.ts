@@ -244,6 +244,43 @@ export function ensureIsolatedChannelConfigDir(
       }
     }
 
+    // 4. Seed onboarding/consent state so the FIRST interactive launch of this
+    //    fresh CLAUDE_CONFIG_DIR does not drop into Claude Code's first-run
+    //    dialogs. A brand-new config dir triggers a CHAIN of interactive prompts
+    //    -- "Select login method" (gated on hasCompletedOnboarding) and the
+    //    per-project "allow external imports" trust dialog (gated on
+    //    projects[cwd].hasTrustDialogAccepted) -- each of which blocks the
+    //    channels TUI before it ever authenticates from CLAUDE_CODE_OAUTH_TOKEN
+    //    (the env token works headlessly but the interactive pickers bypass it).
+    //    Rather than enumerate every flag (the set grows across Claude Code
+    //    versions; confirmed on 2.1.195, 2026-06-29 fleet rollout), seed the
+    //    isolated .claude.json from a COPY of the already-consented shared
+    //    ~/.claude.json on first provision, so every consent flag is inherited.
+    //    Only seed when absent -- once Claude Code owns the file we leave its
+    //    evolved state alone, just guaranteeing hasCompletedOnboarding stays set.
+    try {
+      const dotClaude = join(cfg, '.claude.json')
+      const sharedDot = join(homedir(), '.claude.json')
+      if (!existsSync(dotClaude)) {
+        let seed: Record<string, unknown> = { hasCompletedOnboarding: true }
+        if (existsSync(sharedDot)) {
+          try { seed = JSON.parse(readFileSync(sharedDot, 'utf-8')) as Record<string, unknown> } catch { /* keep minimal */ }
+        }
+        seed.hasCompletedOnboarding = true
+        writeFileSync(dotClaude, JSON.stringify(seed, null, 2) + '\n')
+      } else {
+        try {
+          const cur = JSON.parse(readFileSync(dotClaude, 'utf-8')) as Record<string, unknown>
+          if (cur.hasCompletedOnboarding !== true) {
+            cur.hasCompletedOnboarding = true
+            writeFileSync(dotClaude, JSON.stringify(cur, null, 2) + '\n')
+          }
+        } catch { /* unparseable -> leave for Claude Code to recreate */ }
+      }
+    } catch (err) {
+      logger.warn({ err, name }, 'isolated-config: failed to seed onboarding state')
+    }
+
     return cfg
   } catch (err) {
     logger.warn({ err, name }, 'isolated-config: provisioning failed, falling back to shared ~/.claude')
@@ -1180,6 +1217,15 @@ const PARKED_STABLE_CONFIRM_S = '2'
 const PARKED_CLEAR_SETTLE_S = '0.3'
 // Bound the Ctrl-U presses for a (possibly multi-line) stale parked input.
 const PARKED_CLEAR_MAX = 3
+// A parked input that resists clearing must NOT be retried on every router tick:
+// each attempt blocks the event loop for ~PARKED_STABLE_CONFIRM_S on the settle
+// sleep, so a permanently-stuck box would pin the loop, stall the HTTP server
+// (health probes read 000) and drive the watchdog into a dashboard restart loop.
+// Retry the SAME stuck text at most once per this window, per session.
+const UNWEDGE_COOLDOWN_MS = 30_000
+// Per-session record of the last un-wedge attempt: when, on what text, and how
+// many consecutive attempts failed to actually empty the box.
+const unwedgeAttempts = new Map<string, { last: number; sig: string; fails: number }>()
 
 // Un-wedge a session whose input box holds STALE parked text: a non-submitted
 // line (e.g. a weak local model that typed its heartbeat reply into the box
@@ -1194,15 +1240,53 @@ export function clearStaleParkedInput(session: string, host: string | null = nul
   if (a == null || detectPaneState(a) !== 'typing') return false
   const parked = parkedInputText(a)
   if (!parked) return false
+
+  // Cooldown guard FIRST, before any blocking sleep: if the same parked text was
+  // attempted within the cooldown window, bail in microseconds. This is what
+  // keeps a stubborn box from starving the event loop on every router tick --
+  // the root cause of the dashboard crash-loop (constant ~2s blocking sleeps ->
+  // HTTP 000 -> watchdog restart -> re-wedge on the same persisted input).
+  const key = (host ?? 'local') + ':' + session
+  const nowMs = Date.now()
+  const prev = unwedgeAttempts.get(key)
+  if (prev && prev.sig === parked && nowMs - prev.last < UNWEDGE_COOLDOWN_MS) return false
+
   try { execFileSync('/bin/sleep', [PARKED_STABLE_CONFIRM_S], { timeout: 4000 }) } catch { /* best effort */ }
   const b = capturePane(session, host)
-  // Changed (someone is typing) or already cleared -> leave it alone.
+  // Changed (someone is typing) or already cleared -> leave it alone, and do not
+  // record an attempt (this was never a stuck box).
   if (b == null || detectPaneState(b) !== 'typing' || parkedInputText(b) !== parked) return false
+
   for (let i = 0; i < PARKED_CLEAR_MAX; i++) {
     runTmux(host, ['send-keys', '-t', session, 'C-u'], { timeout: 5000 })
     try { execFileSync('/bin/sleep', [PARKED_CLEAR_SETTLE_S], { timeout: 2000 }) } catch { /* best effort */ }
     const after = capturePane(session, host)
     if (after == null || detectPaneState(after) !== 'typing') break
+  }
+
+  // Escalation: if Ctrl-U alone did not empty a multi-row box, send Home (C-a)
+  // then kill-to-end (C-k) and one more Ctrl-U round before giving up.
+  let post = capturePane(session, host)
+  if (post != null && detectPaneState(post) === 'typing' && parkedInputText(post) === parked) {
+    runTmux(host, ['send-keys', '-t', session, 'C-a'], { timeout: 5000 })
+    runTmux(host, ['send-keys', '-t', session, 'C-k'], { timeout: 5000 })
+    for (let i = 0; i < PARKED_CLEAR_MAX; i++) {
+      runTmux(host, ['send-keys', '-t', session, 'C-u'], { timeout: 5000 })
+      try { execFileSync('/bin/sleep', [PARKED_CLEAR_SETTLE_S], { timeout: 2000 }) } catch { /* best effort */ }
+      post = capturePane(session, host)
+      if (post == null || detectPaneState(post) !== 'typing') break
+    }
+  }
+
+  // Verify the box is ACTUALLY empty before claiming success: only then is the
+  // pending message safe to deliver next tick. Otherwise record the failure so
+  // the cooldown guard above backs us off instead of hammering every tick.
+  const final = capturePane(session, host)
+  const stillStuck = final != null && detectPaneState(final) === 'typing' && parkedInputText(final) === parked
+  unwedgeAttempts.set(key, { last: nowMs, sig: parked, fails: stillStuck ? ((prev && prev.sig === parked ? prev.fails : 0) + 1) : 0 })
+  if (stillStuck) {
+    logger.warn({ session, parked: parked.slice(0, 60), fails: unwedgeAttempts.get(key)!.fails }, 'message-router: parked input resisted clearing, backing off')
+    return false
   }
   logger.warn({ session, parked: parked.slice(0, 60) }, 'message-router: cleared stale parked input (channel un-wedge)')
   return true
