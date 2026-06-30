@@ -23,36 +23,41 @@ import { readBody, json } from '../http-helpers.js'
 import { getEffectiveSettingValue } from '../../settings-store.js'
 import type { RouteContext } from './types.js'
 
-// A headless agent cannot "drag" a card to done, so the dispatch hands it the
-// exact curl commands to (1) post a short, human-readable result summary as a
-// comment -- so the finished task's result lands on its OWN card, visible in the
-// dashboard UI -- and (2) mark the card done. This is the lightweight
-// alternative to spawning a separate per-session card for every agent run: the
-// result goes where the work was asked for, with zero extra board clutter. The
-// token is read from the store at call time (never embedded in the message).
+// Notify-before-done: a sub-agent never closes its own card. When the
+// deliverable is finished, the agent reports back to the orchestrator
+// (MAIN_AGENT_ID) via inter-agent message with summary + commit hash; the
+// card stays in_progress, and the orchestrator verifies and flips done.
+// If the agent is blocked on external input, it posts a comment explaining
+// what it's waiting for and moves the card to waiting -- which IS a self
+// state change (it expects unblocking, not closing). The token is read
+// from the store at call time (never embedded in the message).
 export function kanbanMoveInstructions(id: string, target: string): string {
   const tokenPath = join(STORE_DIR, '.dashboard-token')
   const base = `http://${WEB_HOST}:${WEB_PORT}`
   const auth = `-H "Authorization: Bearer $(cat ${tokenPath})"`
+  const messagesUrl = `${base}/api/messages`
   const moveUrl = `${base}/api/kanban/${id}/move`
   const commentUrl = `${base}/api/kanban/${id}/comments`
   return [
-    'A kártyát in_progress-re húzták. Amikor VÉGEZTÉL, két lépés (mindkettő a kártyára kerül, a web UI-ban látszik):',
+    `A kártyát in_progress-re húzták. AMIKOR ELKÉSZÜLTÉL, NE mozgasd magad done-ra — ${MAIN_AGENT_ID} zárja a verify cycle után. Két útvonal:`,
     '',
-    '1) Írj egy rövid eredmény-összefoglalót kommentként (1-2 mondat: mi lett a vége):',
+    `1) Kész vagy (deliverable leszállítva): küldj inter-agent üzenetet ${MAIN_AGENT_ID}-nak (1-2 mondat summary + commit hash, ha van). A kártya in_progress marad, ${MAIN_AGENT_ID} verifikál és zárja.`,
+    `  curl -s -X POST ${messagesUrl} \\`,
+    `    ${auth} \\`,
+    `    -H 'Content-Type: application/json' \\`,
+    `    -d '{"from":"${target}","to":"${MAIN_AGENT_ID}","content":"#${id} kész: AZ EREDMENY ROVIDEN. commit: <hash-ha-van>"}'`,
+    '',
+    '2) Elakadtál vagy külső inputra vársz: írj kommentet a kártyára (mire vársz), majd állítsd waiting-re.',
     `  curl -s -X POST ${commentUrl} \\`,
     `    ${auth} \\`,
     `    -H 'Content-Type: application/json' \\`,
-    `    -d '{"author":"${target}","content":"AZ EREDMENY ROVIDEN"}'`,
-    '',
-    '2) Állítsd a kártyát done-ra:',
+    `    -d '{"author":"${target}","content":"WAITING OKA / MIRE VARSZ"}'`,
     `  curl -s -X POST ${moveUrl} \\`,
     `    ${auth} \\`,
     `    -H 'Content-Type: application/json' \\`,
-    `    -d '{"status":"done"}'`,
+    `    -d '{"status":"waiting"}'`,
     '',
-    'Ha elakadtál / inputra vársz: a 2) helyett status="waiting".',
-    'A "done"-t mindenképp te jelezd — a dashboard csak az in_progress/waiting állapotot követi automatikusan a session aktivitásából. Az eredmény-kommentet (1) ne hagyd ki: az a kártyán a látható eredmény.',
+    `NE állítsd a kártyát "done"-ra magad — az ${MAIN_AGENT_ID} feladata a verify után.`,
   ].join('\n')
 }
 
