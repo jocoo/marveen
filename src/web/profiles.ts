@@ -13,7 +13,12 @@ export interface ProfileTemplate {
   label: string
   description: string
   permissionMode: 'strict' | 'permissive'
-  filesystem: { allow: string[]; deny: string[] }
+  // Native Claude Code permissions block. Entries are tool-match patterns
+  // (e.g. "Bash(git:*)", "Read(${AGENT_DIR}/**)", "mcp__foo__bar") -- NOT
+  // filesystem paths. Renamed from `filesystem` in 2026-07 after a
+  // regression where a `permissions.allow` block sitting alongside the old
+  // `filesystem.allow` in a template was silently ignored by the writer.
+  permissions: { allow: string[]; deny: string[] }
 }
 
 export const PROFILES_DIR = join(PROJECT_ROOT, 'templates', 'profiles')
@@ -23,7 +28,7 @@ export const HARDCODED_DEFAULT_PROFILE: ProfileTemplate = {
   label: 'Alapértelmezett',
   description: 'Permissive fallback.',
   permissionMode: 'permissive',
-  filesystem: { allow: [], deny: ['mcp__claude_ai_Supabase__*'] },
+  permissions: { allow: [], deny: ['mcp__claude_ai_Supabase__*'] },
 }
 
 export function listProfileTemplates(): ProfileTemplate[] {

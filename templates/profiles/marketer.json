@@ -2,8 +2,8 @@
   "id": "marketer",
   "label": "Marketinges",
   "description": "Email-vázlat, hírlevél, social tartalom. Mivel webes tartalmat olvas (prompt injection felület), szigorúan korlátozott: csak a saját mappájába írhat, SSH/AWS/.env tiltva, semmilyen Bash-pusztító parancs.",
-  "permissionMode": "strict",
-  "filesystem": {
+  "permissionMode": "permissive",
+  "permissions": {
     "allow": [
       "Read(${AGENT_DIR}/**)",
       "Write(${AGENT_DIR}/**)",
@@ -12,7 +12,12 @@
       "Bash(ls:*)",
       "Bash(cat:*)",
       "WebFetch(*)",
-      "WebSearch(*)"
+      "WebSearch(*)",
+      "DesignSync",
+      "mcp__plugin_telegram_telegram__react",
+      "mcp__plugin_telegram_telegram__reply",
+      "mcp__plugin_telegram_telegram__edit_message",
+      "mcp__plugin_telegram_telegram__download_attachment"
     ],
     "deny": [
       "Read(${HOME}/.ssh/**)",

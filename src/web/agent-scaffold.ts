@@ -164,6 +164,29 @@ export function ensureAgentStalenessHook(name: string): boolean {
   return true
 }
 
+// Claude Code runtime self-scheduling tool names denied for sub-agents (fail-
+// closed, enforced even under --dangerously-skip-permissions). The Bash escape
+// routes are covered by the self-pace-gate hook, which a name-deny cannot reach.
+const SELF_PACE_TOOL_DENY = ['ScheduleWakeup', 'CronCreate', 'CronDelete', 'CronList', 'RemoteTrigger']
+
+// Pure transform: profile → resolved permissions block. Extracted so the
+// profile-key wiring (permissions.allow lands in the output) is unit-testable
+// without touching the real agents/ tree. Placeholders (${AGENT_DIR}, ${HOME})
+// resolve against ctx; the SELF_PACE_TOOL_DENY tool-name deny is appended
+// when the caller flags the agent as subject to the governance gates.
+export function buildResolvedPermissions(
+  profile: ProfileTemplate,
+  ctx: { HOME: string; AGENT_DIR: string },
+  includeSelfPaceDeny: boolean,
+): { allow: string[]; deny: string[] } {
+  const deny = profile.permissions.deny.map(p => resolveProfilePlaceholders(p, ctx))
+  if (includeSelfPaceDeny) deny.push(...SELF_PACE_TOOL_DENY)
+  return {
+    allow: profile.permissions.allow.map(p => resolveProfilePlaceholders(p, ctx)),
+    deny,
+  }
+}
+
 export function writeAgentSettingsFromProfile(name: string, profile: ProfileTemplate): void {
   const agentRoot = agentDir(name)
   const settingsDir = join(agentRoot, '.claude')
@@ -174,17 +197,12 @@ export function writeAgentSettingsFromProfile(name: string, profile: ProfileTemp
     try { existing = JSON.parse(readFileSync(settingsPath, 'utf-8')) } catch { /* overwrite */ }
   }
   const ctx = { HOME: homedir(), AGENT_DIR: agentRoot }
-  const denyList = profile.filesystem.deny.map(p => resolveProfilePlaceholders(p, ctx))
   // Self-pace tool-name deny: every sub-agent (NOT the main agent) is denied the
   // Claude Code runtime self-scheduling tools. A whole-tool-name deny IS enforced
   // even under --dangerously-skip-permissions (deny is checked BEFORE the bypass
   // allow), so this is a fail-closed layer; the self-pace-gate hook below covers
   // the Bash escape routes a name-deny cannot reach. (2026-06-26 autonom-kor fix.)
-  if (agentGetsGovernanceGates(name)) denyList.push(...SELF_PACE_TOOL_DENY)
-  existing.permissions = {
-    allow: profile.filesystem.allow.map(p => resolveProfilePlaceholders(p, ctx)),
-    deny: denyList,
-  }
+  existing.permissions = buildResolvedPermissions(profile, ctx, agentGetsGovernanceGates(name))
   // Governance hard-gates: every sub-agent (NOT the main agent) gets PreToolUse
   // hooks. Re-applied on every spawn (this function regenerates settings.json),
   // so they survive respawns. (a) email-send block -- outbound email routes
@@ -229,11 +247,6 @@ export function injectEmailSendGate(existing: Record<string, unknown>): void {
     entry,
   ]
 }
-
-// Claude Code runtime self-scheduling tool names denied for sub-agents (fail-
-// closed, enforced even under --dangerously-skip-permissions). The Bash escape
-// routes are covered by the self-pace-gate hook, which a name-deny cannot reach.
-const SELF_PACE_TOOL_DENY = ['ScheduleWakeup', 'CronCreate', 'CronDelete', 'CronList', 'RemoteTrigger']
 
 // Which agents are subject to the self-pace gate: every agent EXCEPT the main
 // agent (same name-agnostic main-exempt rule as the email gate). Pure + exported

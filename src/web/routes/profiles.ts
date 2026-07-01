@@ -11,8 +11,8 @@ export async function tryHandleProfiles(ctx: RouteContext): Promise<boolean> {
       label: p.label,
       description: p.description,
       permissionMode: p.permissionMode,
-      allowCount: p.filesystem.allow.length,
-      denyCount: p.filesystem.deny.length,
+      allowCount: p.permissions.allow.length,
+      denyCount: p.permissions.deny.length,
     })))
     return true
   }

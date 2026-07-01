@@ -964,8 +964,8 @@ export async function tryHandleAgents(ctx: RouteContext, webDir: string): Promis
       label: profile.label,
       description: profile.description,
       permissionMode: profile.permissionMode,
-      allow: profile.filesystem.allow.map(p => resolveProfilePlaceholders(p, placeholders)),
-      deny: profile.filesystem.deny.map(p => resolveProfilePlaceholders(p, placeholders)),
+      allow: profile.permissions.allow.map(p => resolveProfilePlaceholders(p, placeholders)),
+      deny: profile.permissions.deny.map(p => resolveProfilePlaceholders(p, placeholders)),
     })
     return true
   }
