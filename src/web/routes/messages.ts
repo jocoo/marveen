@@ -48,7 +48,17 @@ export async function tryHandleMessages(ctx: RouteContext): Promise<boolean> {
     // every downstream consumer sees the canonical reference even when a
     // sub-agent forgets the CLAUDE.md rule (#75 Cuzcoo dispatch).
     const normalizedContent = normalizeKanbanRefs(content.trim(), getKanbanSeqByIdPrefix)
-    const msg = createAgentMessage(from.trim(), to.trim(), normalizedContent)
+    // Boundary normalization: agent identity is case-insensitive across the
+    // system (agent dirs are lowercase, the message-router matches lowercase,
+    // sub-agent tmux sessions are `agent-<lower>`). Callers -- including the
+    // kanban CLAUDE.md convention -- often title-case names like "Kronk". If
+    // we persist a mixed-case row here, the router can't find the session and
+    // the message fails; worse, downstream distinct-by-name aggregations show
+    // two of the same agent. Normalize at THIS peremfelület so the DB is a
+    // single source of truth.
+    const normalizedFrom = from.trim().toLowerCase()
+    const normalizedTo = to.trim().toLowerCase()
+    const msg = createAgentMessage(normalizedFrom, normalizedTo, normalizedContent)
     logger.info({ id: msg.id, from: msg.from_agent, to: msg.to_agent }, 'Agent message created')
     json(res, msg)
     return true
