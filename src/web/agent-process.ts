@@ -36,6 +36,8 @@ import { writeAgentSettingsFromProfile } from './agent-scaffold.js'
 import { schedulePluginUnlockAfterRespawn } from './channel-plugin-unlock.js'
 import { getSecret } from './vault.js'
 import { reapChannelOrphans, reapDetachedChannelClaudes } from './channel-poller-reap.js'
+import { MAIN_CHANNELS_SESSION } from './main-agent.js'
+import { notifyChannel } from '../notify.js'
 
 const TMUX = resolveFromPath('tmux')
 const CLAUDE = resolveFromPath('claude')
@@ -1223,9 +1225,17 @@ const PARKED_CLEAR_MAX = 3
 // (health probes read 000) and drive the watchdog into a dashboard restart loop.
 // Retry the SAME stuck text at most once per this window, per session.
 const UNWEDGE_COOLDOWN_MS = 30_000
-// Per-session record of the last un-wedge attempt: when, on what text, and how
-// many consecutive attempts failed to actually empty the box.
-const unwedgeAttempts = new Map<string, { last: number; sig: string; fails: number }>()
+// Escalate to the operator (NOTIFY only -- a Telegram message, never a
+// keystroke) once per stuck episode after this many consecutive confirmed-stuck
+// detections (~one per UNWEDGE_COOLDOWN_MS). The main agent escalates sooner
+// because its box is NEVER auto-cleared (the parked line may be a real reply),
+// so escalation is the only recovery; a sub-agent escalates only after the
+// auto-clear has genuinely failed several times.
+const SUBAGENT_PARKED_ESCALATE_AFTER = 6  // ~3min for a sub-agent whose auto-clear keeps failing
+// Per-session record of the last un-wedge attempt: when, on what text, how many
+// consecutive attempts failed to empty the box, and whether we already notified
+// the operator for this exact stuck text (one-shot; resets when sig/clears).
+const unwedgeAttempts = new Map<string, { last: number; sig: string; fails: number; escalated: boolean }>()
 
 // Un-wedge a session whose input box holds STALE parked text: a non-submitted
 // line (e.g. a weak local model that typed its heartbeat reply into the box
@@ -1238,7 +1248,15 @@ const unwedgeAttempts = new Map<string, { last: number; sig: string; fails: numb
 export function clearStaleParkedInput(session: string, host: string | null = null): boolean {
   const a = capturePane(session, host)
   if (a == null || detectPaneState(a) !== 'typing') return false
-  const parked = parkedInputText(a)
+  // DIM-GUARD (2026-06-30, Szabi insight): extract the parked TEXT from the
+  // dim-stripped (-e) view. Ghost/phantom frames -- stale captures, placeholder
+  // hints, a persona fragment left by a send-keys delivery (the "Koszi a halakat."
+  // false-positive) -- render DIM (SGR-2 faint) and are stripped by
+  // captureParkedInputView, so they read as NO parked text and are never treated
+  // as a wedge (no clear, no escalate). Only a REAL typed line (normal intensity)
+  // survives the strip. Falls back to the plain capture only if the -e capture
+  // fails (rare), preserving prior behaviour in that edge case.
+  const parked = parkedInputText(captureParkedInputView(session, host) ?? a)
   if (!parked) return false
 
   // Cooldown guard FIRST, before any blocking sleep: if the same parked text was
@@ -1254,8 +1272,26 @@ export function clearStaleParkedInput(session: string, host: string | null = nul
   try { execFileSync('/bin/sleep', [PARKED_STABLE_CONFIRM_S], { timeout: 4000 }) } catch { /* best effort */ }
   const b = capturePane(session, host)
   // Changed (someone is typing) or already cleared -> leave it alone, and do not
-  // record an attempt (this was never a stuck box).
-  if (b == null || detectPaneState(b) !== 'typing' || parkedInputText(b) !== parked) return false
+  // record an attempt (this was never a stuck box). Compare on the SAME dim-
+  // stripped view as the initial extraction so a dim ghost can't flip the result.
+  if (b == null || detectPaneState(b) !== 'typing' || parkedInputText(captureParkedInputView(session, host) ?? b) !== parked) return false
+
+  // The main agent's input box is NEVER auto-cleared (a parked line could be a
+  // real reply -- the 2026-06-30 "Balogh" near-miss). The operator escalation is
+  // MUTED (2026-06-30, Szabi): the main box's "parked" lines are overwhelmingly
+  // DIM ghost/placeholder frames (stale capture, not real input -- e.g. a persona
+  // fragment shown for 28 min while the agent was actively turning), so notifying
+  // on each is false-positive noise. The durable fix is the inbox pull-model (no
+  // send-keys delivery -> no parked fragments) + a dim-text guard in pane
+  // detection (a faint SGR line is a ghost, not a parked command). Until those
+  // land: stay silent. Still RECORD the attempt so the cooldown guard backs us off
+  // and we don't re-run the stable-confirm sleep on every router tick.
+  if (session === MAIN_CHANNELS_SESSION) {
+    const fails = (prev && prev.sig === parked ? prev.fails : 0) + 1
+    unwedgeAttempts.set(key, { last: nowMs, sig: parked, fails, escalated: true })
+    logger.debug({ session, parked: parked.slice(0, 60), fails }, 'message-router: main-agent parked input -- left untouched (escalation muted)')
+    return false
+  }
 
   for (let i = 0; i < PARKED_CLEAR_MAX; i++) {
     runTmux(host, ['send-keys', '-t', session, 'C-u'], { timeout: 5000 })
@@ -1283,11 +1319,27 @@ export function clearStaleParkedInput(session: string, host: string | null = nul
   // the cooldown guard above backs us off instead of hammering every tick.
   const final = capturePane(session, host)
   const stillStuck = final != null && detectPaneState(final) === 'typing' && parkedInputText(final) === parked
-  unwedgeAttempts.set(key, { last: nowMs, sig: parked, fails: stillStuck ? ((prev && prev.sig === parked ? prev.fails : 0) + 1) : 0 })
   if (stillStuck) {
-    logger.warn({ session, parked: parked.slice(0, 60), fails: unwedgeAttempts.get(key)!.fails }, 'message-router: parked input resisted clearing, backing off')
+    const fails = (prev && prev.sig === parked ? prev.fails : 0) + 1
+    let escalated = !!(prev && prev.sig === parked && prev.escalated)
+    // A sub-agent box that resists the Ctrl-U clear this many times is genuinely
+    // wedged (not the usual junk heartbeat line the auto-clear handles) -- surface
+    // it to the operator ONCE so it cannot stall silently like the 1h main-agent
+    // incident did behind a lone WARN.
+    if (!escalated && fails >= SUBAGENT_PARKED_ESCALATE_AFTER) {
+      const preview = parked.slice(0, 80).replace(/[<>&]/g, ' ')
+      notifyChannel(
+        `⚠️ Egy sub-agent (${session}) input-mezojebe beragadt egy parkolt sor, ` +
+        `az auto-tisztitas ${fails}x sikertelen -- lehet kezi beavatkozas kell. Reszlet: "${preview}"`,
+      ).catch(() => { /* notify is best-effort */ })
+      escalated = true
+      logger.warn({ session, parked: parked.slice(0, 60), fails }, 'message-router: sub-agent parked input resisted clearing -- escalated to operator')
+    }
+    unwedgeAttempts.set(key, { last: nowMs, sig: parked, fails, escalated })
+    logger.warn({ session, parked: parked.slice(0, 60), fails }, 'message-router: parked input resisted clearing, backing off')
     return false
   }
+  unwedgeAttempts.set(key, { last: nowMs, sig: parked, fails: 0, escalated: false })
   logger.warn({ session, parked: parked.slice(0, 60) }, 'message-router: cleared stale parked input (channel un-wedge)')
   return true
 }
