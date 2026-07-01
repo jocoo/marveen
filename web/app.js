@@ -3310,29 +3310,44 @@ async function loadVoiceConfig(agentName) {
   if (!voiceModelSel) return
   const banner = document.getElementById('voiceNotInstalledBanner')
   const controls = document.getElementById('voiceInstalledControls')
+  // Fallback: if any step below silently fails, always show the install banner
+  // so the user has a Telepítés button. Silent-return leaves both hidden and
+  // the "Válaszmód (hang/szöveg)" label sits above an empty pane (#98).
+  const showInstallBanner = () => {
+    if (banner) banner.hidden = false
+    if (controls) controls.hidden = true
+  }
   try {
-    // Check toolkit installation first
     const statusR = await fetch('/api/voice/status')
-    if (!statusR.ok) return
+    if (!statusR.ok) {
+      console.warn('Voice status check failed:', statusR.status)
+      showInstallBanner()
+      return
+    }
     const status = await statusR.json()
 
     if (!status.installed) {
-      if (banner) banner.hidden = false
-      if (controls) controls.hidden = true
+      showInstallBanner()
       return
     }
     if (banner) banner.hidden = true
     if (controls) controls.hidden = false
 
     const r = await fetch(`/api/agents/${encodeURIComponent(agentName)}/voice-config`)
-    if (!r.ok) return
+    if (!r.ok) {
+      console.warn('Voice config fetch failed:', r.status)
+      return
+    }
     const cfg = await r.json()
     voiceModelSel.innerHTML = (cfg.availableVoices || []).map(v =>
       `<option value="${v}"${v === cfg.voiceModel ? ' selected' : ''}>${v}</option>`
     ).join('')
     const modeInput = document.querySelector(`input[name="voiceResponseMode"][value="${cfg.responseMode || 'text'}"]`)
     if (modeInput) modeInput.checked = true
-  } catch { /* silent */ }
+  } catch (err) {
+    console.warn('Voice config load errored:', err)
+    showInstallBanner()
+  }
 }
 
 let _voiceInstallPollTimer = null

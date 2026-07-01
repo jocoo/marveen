@@ -59,11 +59,13 @@ Más nyelv vagy hang behúzható ugyanebbe a könyvtárba -- a rendszer automati
 
 ### Telepítés
 
-Dashboard → ügynök részletei → **Voice** fül → **Telepítés** gomb. Egy kattintással feltelepíti a Whisper és Piper toolkitet. Egyszeri, helyi, nem igényel root jogot.
+Dashboard → ügynök részletei → **Beállítások** fül → "Válaszmód (hang/szöveg)" szekció → **Telepítés** gomb. Egy kattintással feltelepíti a Whisper és Piper toolkitet. Egyszeri, helyi, nem igényel root jogot.
+
+> **Megjegyzés (2026-07-01):** A doksi eredetileg külön "Voice" fület említett, a jelenlegi implementációban a voice-beállítások a Beállítások fülön belül élnek. `TODO(voice-tab-vs-settings)`: upstream Szotasz/marveen szinkron sign-off után.
 
 ### Konfiguráció
 
-A mód és a hangmodell a dashboardon agensenkénti beállítható (ügynök részletei → Voice fül), vagy REST API-n:
+A mód és a hangmodell a dashboardon agensenkénti beállítható (ügynök részletei → Beállítások fül → "Válaszmód (hang/szöveg)"), vagy REST API-n:
 
 ```
 GET  /api/agents/:id/voice-config

@@ -59,11 +59,13 @@ Any other language or voice can be dropped into the same directory — the dashb
 
 ### Installation
 
-Dashboard → agent detail → **Voice** tab → **Install** button. One click installs the Whisper and Piper toolkit locally. One-time setup, no root required.
+Dashboard → agent detail → **Settings** tab → "Response mode (voice/text)" section → **Install** button. One click installs the Whisper and Piper toolkit locally. One-time setup, no root required.
+
+> **Note (2026-07-01):** The docs previously referenced a separate "Voice" tab; the current implementation places voice settings inside the Settings tab. `TODO(voice-tab-vs-settings)`: pending upstream Szotasz/marveen sign-off.
 
 ### Configuration
 
-Mode and voice model are configurable per agent from the dashboard (agent detail → Voice tab) or via REST API:
+Mode and voice model are configurable per agent from the dashboard (agent detail → Settings tab → "Response mode (voice/text)") or via REST API:
 
 ```
 GET  /api/agents/:id/voice-config
