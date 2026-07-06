@@ -31,9 +31,14 @@ describe('renderHeartbeatClaudeMd', () => {
 
   it('routes the inter-agent message to the main agent id', () => {
     const out = renderHeartbeatClaudeMd(ID)
-    expect(out).toContain('"to":"helios"')
+    // Since 27005c1 the recipient is resolved at runtime from
+    // store/main-agent-id, with the identity's id as the explicit fallback --
+    // the rendered doc must carry both the lookup and the identity-driven
+    // fallback, never a silent hardcode.
+    expect(out).toContain('\\"to\\":\\"$MAIN_AGENT\\"')
+    expect(out).toContain('main-agent-id 2>/dev/null || echo helios')
     // The sender is always the fixed heartbeat agent id.
-    expect(out).toContain('"from":"heartbeat"')
+    expect(out).toContain('\\"from\\":\\"heartbeat\\"')
   })
 
   it('uses the supplied store dir (absolute) for the DB and token paths', () => {
@@ -111,7 +116,7 @@ describe('renderHeartbeatClaudeMd', () => {
     })
     expect(a).not.toBe(b)
     expect(b).toContain("across Omar's systems")
-    expect(b).toContain('"to":"atlas"')
+    expect(b).toContain('main-agent-id 2>/dev/null || echo atlas')
     expect(b).toContain('/data/store/claudeclaw.db')
     expect(b).toContain('http://localhost:9000/api/messages')
   })
