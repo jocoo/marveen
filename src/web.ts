@@ -23,6 +23,7 @@ import { startAutoRestartRunner } from './web/auto-restart-runner.js'
 import { startModelFallbackRunner } from './web/model-fallback-runner.js'
 import { collectTokenUsage } from './web/token-usage.js'
 import { logger } from './logger.js'
+import { markOrphanedTranscribeJobsFailed, createAgentMessage } from './db.js'
 import { tryHandleProfiles } from './web/routes/profiles.js'
 import { tryHandleMessages } from './web/routes/messages.js'
 import { tryHandleAgentTerminal } from './web/routes/agent-terminal.js'
@@ -54,6 +55,8 @@ import { tryHandleSettings } from './web/routes/settings.js'
 import { tryHandleAuditLog } from './web/routes/audit-log.js'
 import { tryHandleStatic } from './web/routes/static.js'
 import { tryHandleVoice } from './web/routes/voice.js'
+import { tryHandleLanguages } from './web/routes/languages.js'
+import { tryHandleTranscribe } from './web/routes/transcribe.js'
 import { tryHandleVaultSsh } from './web/routes/vault-ssh.js'
 import { tryHandleVaultSshKeys } from './web/routes/vault-ssh-keys.js'
 import type { RouteContext } from './web/routes/types.js'
@@ -182,6 +185,8 @@ export function startWebServer(port = 3420): http.Server {
       if (await tryHandleToolLog(routeCtx)) return
       if (await tryHandleSettings(routeCtx)) return
       if (await tryHandleVoice(routeCtx)) return
+      if (await tryHandleLanguages(routeCtx)) return
+      if (await tryHandleTranscribe(routeCtx)) return
       if (await tryHandleVaultSshKeys(routeCtx)) return
       if (await tryHandleVaultSsh(routeCtx)) return
       if (await tryHandleAuditLog(routeCtx)) return
@@ -407,6 +412,16 @@ export function startWebServer(port = 3420): http.Server {
 
   try {
     sweepOrphanedBackgroundTasks()
+    {
+      const reaped = markOrphanedTranscribeJobsFailed()
+      if (reaped.length > 0) logger.info(`[transcribe] marked ${reaped.length} orphaned job(s) failed on boot`)
+      for (const job of reaped) {
+        if (!job.notify_agent) continue
+        try {
+          createAgentMessage('transcribe', job.notify_agent, `[transcribe] Job ${job.id} FAILED: a dashboard újraindult a futás közben, a job árvult. Indítsd újra: POST /api/transcribe {"path":"${job.src_path.replace(/[\r\n\t"]/g, ' ')}"}`)
+        } catch { /* messaging must never block boot */ }
+      }
+    }
   } catch (err) {
     logger.warn({ err }, 'Background task sweep skipped')
   }

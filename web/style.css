@@ -6435,3 +6435,30 @@ body {
     padding-bottom: max(20px, env(safe-area-inset-bottom));
   }
 }
+
+
+/* === Language picker menu (3+ languages) === */
+.lang-menu {
+  position: fixed;
+  z-index: 1000;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(0,0,0,.35);
+  padding: 4px;
+  display: flex;
+  flex-direction: column;
+  min-width: 150px;
+}
+.lang-menu-item {
+  background: none;
+  border: none;
+  color: var(--text);
+  text-align: left;
+  font-size: 13px;
+  padding: 7px 10px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+.lang-menu-item:hover { background: var(--bg-hover, rgba(255,255,255,.06)); }
+.lang-menu-item.active { font-weight: 600; color: var(--accent, #7aa2f7); }

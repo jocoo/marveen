@@ -473,6 +473,26 @@ export function initDatabase(dbPathOverride?: string): void {
   `)
   db.exec(`CREATE INDEX IF NOT EXISTS idx_bg_tasks_agent ON background_tasks(agent_id, status)`)
 
+  // --- Long-form transcription jobs (WhisperX, /api/transcribe) ---
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS transcribe_jobs (
+      id TEXT PRIMARY KEY,
+      requester TEXT,
+      src_path TEXT NOT NULL,
+      model TEXT NOT NULL,
+      diarize INTEGER NOT NULL DEFAULT 0,
+      notify_agent TEXT,
+      status TEXT NOT NULL DEFAULT 'queued' CHECK(status IN ('queued','running','done','failed')),
+      transcript TEXT,
+      transcript_path TEXT,
+      error TEXT,
+      created_at INTEGER NOT NULL,
+      started_at INTEGER,
+      finished_at INTEGER
+    )
+  `)
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_transcribe_jobs_status ON transcribe_jobs(status)`)
+
   // --- Token Usage Monitoring ---
   db.exec(`
     CREATE TABLE IF NOT EXISTS token_usage (
@@ -1481,6 +1501,72 @@ export interface AgentMessage {
   created_at: number
   delivered_at: number | null
   completed_at: number | null
+}
+
+export interface TranscribeJob {
+  id: string
+  requester: string | null
+  src_path: string
+  model: string
+  diarize: number
+  notify_agent: string | null
+  status: 'queued' | 'running' | 'done' | 'failed'
+  transcript: string | null
+  transcript_path: string | null
+  error: string | null
+  created_at: number
+  started_at: number | null
+  finished_at: number | null
+}
+
+export function createTranscribeJob(job: {
+  id: string
+  requester?: string
+  srcPath: string
+  model: string
+  diarize: boolean
+  notifyAgent?: string
+}): TranscribeJob {
+  const now = Math.floor(Date.now() / 1000)
+  db.prepare(
+    'INSERT INTO transcribe_jobs (id, requester, src_path, model, diarize, notify_agent, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
+  ).run(job.id, job.requester ?? null, job.srcPath, job.model, job.diarize ? 1 : 0, job.notifyAgent ?? null, 'queued', now)
+  return getTranscribeJob(job.id)!
+}
+
+export function getTranscribeJob(id: string): TranscribeJob | undefined {
+  return db.prepare('SELECT * FROM transcribe_jobs WHERE id = ?').get(id) as TranscribeJob | undefined
+}
+
+export function listTranscribeJobs(limit = 50): TranscribeJob[] {
+  return db.prepare('SELECT * FROM transcribe_jobs ORDER BY created_at DESC LIMIT ?').all(limit) as TranscribeJob[]
+}
+
+export function markTranscribeJobRunning(id: string): void {
+  db.prepare("UPDATE transcribe_jobs SET status = 'running', started_at = ? WHERE id = ?")
+    .run(Math.floor(Date.now() / 1000), id)
+}
+
+export function finishTranscribeJob(
+  id: string,
+  outcome: { status: 'done' | 'failed'; transcript?: string; transcriptPath?: string; error?: string },
+): void {
+  db.prepare('UPDATE transcribe_jobs SET status = ?, transcript = ?, transcript_path = ?, error = ?, finished_at = ? WHERE id = ?')
+    .run(outcome.status, outcome.transcript ?? null, outcome.transcriptPath ?? null, outcome.error ?? null, Math.floor(Date.now() / 1000), id)
+}
+
+/** Dashboard restarts kill in-flight transcription children; reap their rows on
+ *  boot and return them so requesters with notify_agent can be told. */
+export function markOrphanedTranscribeJobsFailed(): TranscribeJob[] {
+  const orphans = db.prepare(
+    "SELECT * FROM transcribe_jobs WHERE status IN ('queued','running')"
+  ).all() as TranscribeJob[]
+  if (orphans.length > 0) {
+    db.prepare(
+      "UPDATE transcribe_jobs SET status = 'failed', error = 'orphaned by dashboard restart', finished_at = ? WHERE status IN ('queued','running')"
+    ).run(Math.floor(Date.now() / 1000))
+  }
+  return orphans
 }
 
 export function createAgentMessage(from: string, to: string, content: string): AgentMessage {

@@ -1,7 +1,13 @@
 import { existsSync, readFileSync, statSync } from 'node:fs'
 import { join } from 'node:path'
-import { serveFile, MIME } from '../http-helpers.js'
+import { serveFile, MIME, etagMatches } from '../http-helpers.js'
 import { PROJECT_ROOT, BRAND_NAME } from '../../config.js'
+import {
+  buildLangScript,
+  customLanguagesVersion,
+  listCustomLanguages,
+  readCustomLanguage,
+} from '../languages-store.js'
 import type { RouteContext } from './types.js'
 
 // Substitute the configured brand into the PWA manifest's user-visible fields
@@ -35,14 +41,26 @@ function serveIndexHtml(ctx: RouteContext, webDir: string): void {
   try {
     const filePath = join(webDir, 'index.html')
     const s = statSync(filePath)
-    const etag = `"${s.mtimeMs}-${s.size}-${appJsVersion(webDir)}"`
+    // customLanguagesVersion is folded in so a 304-revalidated index.html can
+    // never miss the script tag of a language added since the browser cached it.
+    const etag = `"${s.mtimeMs}-${s.size}-${appJsVersion(webDir)}-${customLanguagesVersion()}"`
     const ifNoneMatch = req.headers['if-none-match']
     if (ifNoneMatch === etag) {
       res.writeHead(304, { ETag: etag, 'Cache-Control': 'no-cache' })
       res.end()
       return
     }
+    // Admin-added languages (store/lang/*.json) are injected as script tags
+    // right after the built-in en.js so every window._i18n dictionary exists
+    // before app.js runs -- language init stays synchronous, no load race.
+    const customLangTags = listCustomLanguages()
+      .map((l) => `  <script src="/lang/${l.code}.js"></script>`)
+      .join('\n')
     const html = readFileSync(filePath, 'utf-8')
+      .replace(
+        /(<script\s+src="\/lang\/en\.js"><\/script>)/,
+        customLangTags ? `$1\n${customLangTags}` : '$1',
+      )
       .replace(
         /(<script\s+src=")\/app\.js(")/,
         `$1/app.js?v=${appJsVersion(webDir)}$2`,
@@ -121,6 +139,26 @@ export async function tryHandleStatic(ctx: RouteContext, webDir: string): Promis
     if (langFile === 'hu.js' || langFile === 'en.js') {
       serveFile(req, res, join(webDir, 'lang', langFile))
       return true
+    }
+    // Admin-added languages: the code is regex-locked (languages-store), and
+    // the served body is generated via JSON.stringify from store/lang/<code>.json,
+    // never admin-supplied JavaScript (stored-XSS guard: the dashboard token
+    // lives in this origin's localStorage).
+    const custom = langFile.match(/^([a-z]{2,3}(?:-[a-z0-9]{2,8})?)\.js$/)
+    if (custom) {
+      const lang = readCustomLanguage(custom[1])
+      if (lang) {
+        const body = buildLangScript(lang.code, lang.strings)
+        const etag = `"lang-${lang.code}-${customLanguagesVersion()}"`
+        if (etagMatches(req.headers['if-none-match'], etag)) {
+          res.writeHead(304, { ETag: etag, 'Cache-Control': 'no-cache' })
+          res.end()
+          return true
+        }
+        res.writeHead(200, { 'Content-Type': MIME['.js'], ETag: etag, 'Cache-Control': 'no-cache' })
+        res.end(body)
+        return true
+      }
     }
     res.writeHead(404); res.end()
     return true

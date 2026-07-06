@@ -5,7 +5,10 @@
 // window._lang; {name} interpolation; EN-fallback then key; dev-mode warning.
 ;(() => {
   const LS_KEY = 'marveen.lang'
-  const VALID = new Set(['hu', 'en'])
+  // A language is valid when its dictionary is loaded. Built-ins (hu/en) are
+  // static script tags; admin-added languages are injected server-side into
+  // index.html before app.js runs, so this stays synchronous at init time.
+  const isValidLang = (l) => typeof l === 'string' && !!(window._i18n && window._i18n[l])
 
   // Brand tokens ({brand} = product/brand name, {bot} = main agent display
   // name, {agentId} = canonical slug) are filled from /api/marveen once it
@@ -27,26 +30,40 @@
   }
 
   function applyLang(lang) {
-    window._lang = VALID.has(lang) ? lang : 'hu'
+    window._lang = isValidLang(lang) ? lang : 'hu'
+    document.documentElement.lang = window._lang
   }
 
-  // Initialise from localStorage; server default fetched async below.
+  // Initialise from localStorage; server default fetched async below. A stored
+  // code whose language no longer exists (custom lang deleted) is purged so it
+  // cannot permanently mask the server default.
+  const storedLang = localStorage.getItem(LS_KEY)
+  if (storedLang && !isValidLang(storedLang)) localStorage.removeItem(LS_KEY)
   applyLang(localStorage.getItem(LS_KEY) || 'hu')
 
-  // Fetch server default (DASHBOARD_LANG) and apply only if localStorage not set.
-  fetch('/api/settings')
-    .then(r => r.ok ? r.json() : null)
-    .then(data => {
-      if (!data || localStorage.getItem(LS_KEY)) return
-      const entry = (data.settings || []).find(s => s.key === 'DASHBOARD_LANG')
-      if (entry && VALID.has(entry.value)) applyLang(entry.value)
-    })
-    .catch(() => {})
+  // Fetch server default (DASHBOARD_LANG) and apply only if localStorage not
+  // set. Deferred to DOMContentLoaded so it runs AFTER the auth bootstrap has
+  // monkeypatched fetch with the Bearer header -- fired synchronously from here
+  // it always 401ed, leaving the server default dead code. persist:false keeps
+  // the server default from masquerading as a user preference.
+  document.addEventListener('DOMContentLoaded', () => {
+    fetch('/api/settings')
+      .then(r => r.ok ? r.json() : null)
+      .then(data => {
+        if (!data || localStorage.getItem(LS_KEY)) return
+        const entry = (data.settings || []).find(s => s.key === 'DASHBOARD_LANG')
+        // No-op when the default equals the already-rendered language --
+        // otherwise every stock page load would double-render.
+        if (entry && isValidLang(entry.value) && entry.value !== window._lang) window.setLang(entry.value, { persist: false })
+      })
+      .catch(() => {})
+  })
 
-  window.setLang = function setLang(lang) {
-    if (!VALID.has(lang)) return
+  window.setLang = function setLang(lang, opts = {}) {
+    if (!isValidLang(lang)) return
     window._lang = lang
-    localStorage.setItem(LS_KEY, lang)
+    document.documentElement.lang = lang
+    if (opts.persist !== false) localStorage.setItem(LS_KEY, lang)
     renderNav()
     // Static elements (kanban column titles, hints, empty states) are otherwise
     // only translated at DOMContentLoaded -- re-apply them on every switch so the
@@ -236,7 +253,10 @@ themeToggle.addEventListener('click', () => {
   localStorage.setItem('cc-theme', next)
 })
 
-// === Language toggle ===
+// === Language menu ===
+// With exactly two loaded languages the button keeps the original one-click
+// hu<->en toggle feel; with three or more it opens a small picker listing every
+// loaded language (built-ins + admin-added) so users can switch on the fly.
 ;(() => {
   const btn = document.getElementById('langToggle')
   if (!btn) return
@@ -244,15 +264,59 @@ themeToggle.addEventListener('click', () => {
     btn.textContent = (window._lang || 'hu').toUpperCase()
   }
   syncLangBtn()
+
+  // Display names: built-ins known statically; admin-added names arrive from
+  // /api/languages after auth. Codes remain the fallback labels.
+  const langNames = { hu: 'Magyar', en: 'English' }
+  // The settings-page add flow registers freshly added languages here so the
+  // picker shows their display name without a reload.
+  window._setLangName = (code, name) => { if (code && name) langNames[code] = name }
+  document.addEventListener('DOMContentLoaded', () => {
+    fetch('/api/languages')
+      .then(r => r.ok ? r.json() : null)
+      .then(data => (data?.languages || []).forEach(l => { langNames[l.code] = l.name }))
+      .catch(() => {})
+  })
+
+  let menu = null
+  function closeMenu() {
+    if (menu) { menu.remove(); menu = null; document.removeEventListener('click', onDocClick) }
+  }
+  function onDocClick(e) {
+    if (menu && !menu.contains(e.target) && e.target !== btn) closeMenu()
+  }
+  function sortedCodes() {
+    const rank = c => (c === 'hu' ? 0 : c === 'en' ? 1 : 2)
+    return Object.keys(window._i18n || {}).sort((a, b) => rank(a) - rank(b) || a.localeCompare(b))
+  }
   btn.addEventListener('click', () => {
-    const next = (window._lang || 'hu') === 'hu' ? 'en' : 'hu'
-    window.setLang(next)
-    syncLangBtn()
+    if (menu) { closeMenu(); return }
+    const codes = sortedCodes()
+    if (codes.length <= 2) {
+      const next = codes.find(c => c !== (window._lang || 'hu'))
+      if (next) window.setLang(next)
+      return
+    }
+    menu = document.createElement('div')
+    menu.className = 'lang-menu'
+    codes.forEach(code => {
+      const item = document.createElement('button')
+      item.type = 'button'
+      item.className = 'lang-menu-item' + (code === window._lang ? ' active' : '')
+      item.textContent = `${code.toUpperCase()} · ${langNames[code] || code}`
+      item.addEventListener('click', () => { window.setLang(code); closeMenu() })
+      menu.appendChild(item)
+    })
+    const r = btn.getBoundingClientRect()
+    menu.style.top = `${r.bottom + 6}px`
+    menu.style.right = `${Math.max(8, window.innerWidth - r.right)}px`
+    document.body.appendChild(menu)
+    setTimeout(() => document.addEventListener('click', onDocClick), 0)
   })
   // Keep button in sync when setLang is called from elsewhere (e.g. /api/settings async load).
   const _origSetLang = window.setLang
-  window.setLang = function setLang(lang) {
-    _origSetLang(lang)
+  window.setLang = function setLang(lang, opts) {
+    _origSetLang(lang, opts)
     syncLangBtn()
   }
 })()
@@ -292,7 +356,7 @@ function switchPage(pageId) {
   if (pageId === 'bgTasks') loadBgTasksPage()
   if (pageId === 'vault') loadVaultPage()
   if (pageId === 'autonomy') loadAutonomy()
-  if (pageId === 'settings') loadSettings()
+  if (pageId === 'settings') { loadSettings(); renderLanguagesAdmin() }
   if (pageId === 'updates') loadUpdates()
   if (pageId === 'team') { loadTeamGraph() }
   if (pageId === 'messages') loadMessagesPage()
@@ -13059,3 +13123,142 @@ function downloadMarkdown(name, content) {
   window._initGanttViewSwitcher = initGanttViewSwitcher
   window.renderGantt = renderGantt
 })()
+
+
+// === Nyelvek (i18n) admin -- Settings page ===
+// Lists loaded + stored languages, adds new ones (skeleton copied from a base
+// language, or an uploaded JSON translation), deletes custom ones. Custom
+// languages are stored server-side as JSON and served as generated scripts;
+// after adding one we lazy-load its script so switching works without reload.
+function loadLangScript(code) {
+  return new Promise((resolve, reject) => {
+    const el = document.createElement('script')
+    el.src = `/lang/${encodeURIComponent(code)}.js`
+    el.onload = () => resolve()
+    el.onerror = () => reject(new Error('script load failed'))
+    document.head.appendChild(el)
+  })
+}
+
+async function renderLanguagesAdmin() {
+  const host = document.getElementById('langAdminCard')
+  if (!host) return
+  host.innerHTML = `<p style="color:var(--text-muted);font-size:13px">${t('common.loading')}</p>`
+  let languages = []
+  try {
+    const res = await fetch('/api/languages')
+    if (!res.ok) throw new Error('fetch failed')
+    languages = (await res.json()).languages || []
+  } catch {
+    host.innerHTML = `<p style="color:var(--text-muted);font-size:13px">${t('langadmin.load_error')}</p>`
+    return
+  }
+  const esc = (x) => String(x).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
+  const enKeys = Object.keys((window._i18n && window._i18n.en) || {})
+  const rows = languages.map(l => {
+    const dict = (window._i18n && window._i18n[l.code]) || null
+    const keys = l.builtin ? enKeys.length : (l.keyCount ?? (dict ? Object.keys(dict).length : 0))
+    const coverage = l.builtin
+      ? 100
+      : dict
+        ? Math.round(Object.keys(dict).filter(k => enKeys.includes(k)).length / Math.max(1, enKeys.length) * 100)
+        : Math.round(Math.min(100, (l.keyCount || 0) / Math.max(1, enKeys.length) * 100))
+    const del = l.builtin
+      ? ''
+      : `<button class="btn-secondary btn-compact lang-del-btn" data-code="${esc(l.code)}">${t('common.delete')}</button>`
+    return `<tr>
+      <td><code>${esc(l.code)}</code>${l.code === window._lang ? ' ●' : ''}</td>
+      <td>${esc(l.name)}</td>
+      <td>${l.builtin ? t('langadmin.builtin') : t('langadmin.custom')}</td>
+      <td>${keys}</td>
+      <td>${coverage}%</td>
+      <td>${del}</td>
+    </tr>`
+  }).join('')
+  const baseOptions = Object.keys(window._i18n || {}).sort()
+    .map(c => `<option value="${esc(c)}"${c === 'en' ? ' selected' : ''}>${esc(c)}</option>`).join('')
+  host.innerHTML = `
+    <div class="card" style="padding:20px">
+      <h3 style="margin:0 0 4px">${t('langadmin.title')}</h3>
+      <p style="margin:0 0 14px;color:var(--text-muted);font-size:13px">${t('langadmin.subtitle')}</p>
+      <table class="mem-table" style="width:100%;font-size:13px">
+        <thead><tr>
+          <th>${t('langadmin.table_code')}</th><th>${t('langadmin.table_name')}</th>
+          <th>${t('langadmin.table_type')}</th><th>${t('langadmin.table_keys')}</th>
+          <th>${t('langadmin.table_coverage')}</th><th></th>
+        </tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+      <div style="margin-top:16px;padding-top:14px;border-top:1px solid var(--border)">
+        <h4 style="margin:0 0 10px">${t('langadmin.add_title')}</h4>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+          <input class="input" id="langAddCode" placeholder="${t('langadmin.code_ph')}" style="width:110px" maxlength="12">
+          <input class="input" id="langAddName" placeholder="${t('langadmin.name_ph')}" style="width:170px" maxlength="64">
+          <label style="font-size:13px;color:var(--text-muted)">${t('langadmin.base_label')}
+            <select class="input" id="langAddBase" style="width:90px;margin-left:6px">${baseOptions}</select>
+          </label>
+          <label style="font-size:13px;color:var(--text-muted)">${t('langadmin.upload_label')}
+            <input type="file" id="langAddFile" accept=".json,application/json" style="font-size:12px;margin-left:6px">
+          </label>
+          <button class="btn-primary btn-compact" id="langAddBtn">${t('langadmin.btn_add')}</button>
+        </div>
+        <p id="langAddMsg" style="margin:8px 0 0;font-size:13px;color:var(--text-muted)"></p>
+      </div>
+    </div>`
+
+  host.querySelectorAll('.lang-del-btn').forEach(b => b.addEventListener('click', async () => {
+    const code = b.dataset.code
+    if (!confirm(t('langadmin.delete_confirm', { code }))) return
+    try {
+      const res = await fetch(`/api/languages/${encodeURIComponent(code)}`, { method: 'DELETE' })
+      if (!res.ok) throw new Error((await res.json()).error || 'delete failed')
+      if (window._i18n) delete window._i18n[code]
+      if (window._lang === code) window.setLang('hu')
+      renderLanguagesAdmin()
+    } catch (err) {
+      alert(err.message)
+    }
+  }))
+
+  const addBtn = host.querySelector('#langAddBtn')
+  addBtn.addEventListener('click', async () => {
+    const msg = host.querySelector('#langAddMsg')
+    const code = host.querySelector('#langAddCode').value.trim().toLowerCase()
+    const name = host.querySelector('#langAddName').value.trim()
+    const base = host.querySelector('#langAddBase').value
+    const file = host.querySelector('#langAddFile').files[0]
+    if (!code || !name) { msg.textContent = t('langadmin.need_code_name'); return }
+    addBtn.disabled = true
+    msg.textContent = t('common.saving')
+    try {
+      let strings
+      if (file) {
+        const parsed = JSON.parse(await file.text())
+        strings = parsed && typeof parsed === 'object' && parsed.strings ? parsed.strings : parsed
+      } else {
+        // Skeleton: copy the base language so the UI is instantly usable in the
+        // new locale; translations can then be refined key by key via PUT.
+        strings = { ...((window._i18n && window._i18n[base]) || window._i18n.en) }
+      }
+      const res = await fetch('/api/languages', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ code, name, strings, actor: 'dashboard-ui' }),
+      })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error || 'add failed')
+      await loadLangScript(code).catch(() => {})
+      if (window._setLangName) window._setLangName(code, name)
+      // Re-render replaces the whole card (and with it #langAddMsg), so the
+      // confirmation must be written into the REBUILT card.
+      await renderLanguagesAdmin()
+      const freshMsg = host.querySelector('#langAddMsg')
+      if (freshMsg) freshMsg.textContent = t('langadmin.added', { code })
+      return
+    } catch (err) {
+      msg.textContent = `${t('langadmin.add_error')}: ${err.message}`
+    } finally {
+      addBtn.disabled = false
+    }
+  })
+}

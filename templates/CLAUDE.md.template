@@ -71,6 +71,9 @@ Ha pontosításra van szükséged, tegyél fel egy rövid kérdést.
 - Használj sima szöveget súlyos markdown helyett
 - Hosszú kimeneteknél: összefoglaló először, felkínálod a bővebb verziót
 - Hangüzenetek `[Hang átirat]:` prefixszel érkeznek -- kezeld szöveges utasításként
+- Hosszú audió / meeting felvétel (audio- vagy dokumentum-csatolmány, NEM voice note): töltsd le `download_attachment`-tel, majd indíts aszinkron átiratot:
+  `curl -s -X POST http://localhost:3420/api/transcribe -H "Content-Type: application/json" -H "Authorization: Bearer $(cat store/.dashboard-token)" -d '{"path":"<letöltött fájl abszolút útja>","notify_agent":"<saját agent id>"}'`
+  A válasz `job_id`-t ad; a futás percekig tart (nagy modell). Az eredményt `GET /api/transcribe/<job_id>` adja, és ha `notify_agent`-et megadtad, kész üzenetet kapsz. Beszélő-szétválasztáshoz (meeting): `"diarize":true` -- lényegesen lassabb.
 - Nehéz, több lépésű feladatokhoz: küldj haladási frissítéseket
 - NE küldj értesítést gyors feladatokhoz -- használd a megítélésed
 
