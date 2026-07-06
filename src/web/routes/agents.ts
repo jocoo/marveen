@@ -95,6 +95,7 @@ import type { AgentRunState } from '../ssh-tmux.js'
 import { readActiveModelFromProjectDir, readContextTokensFromProjectDir } from '../active-model.js'
 import { detectPaneState } from '../../pane-state.js'
 import { detectReauthNeeded } from '../reauth-detect.js'
+import { getDesignSyncAuthState, recordDesignLogin } from '../designsync-auth.js'
 import { readAutoRestartConfig, writeAutoRestartConfig } from '../auto-restart-store.js'
 import type { AutoRestartConfig } from '../../auto-restart.js'
 import { setStoreWriteActor } from '../../store-watcher.js'
@@ -329,6 +330,12 @@ interface AgentSummary {
    *  drives the dashboard "reauth needed" badge + one-click /login button. */
   needsReauth: boolean
   reauthReason?: string
+  /** True when this agent uses the DesignSync tool but its in-process auth was
+   *  lost (e.g. on restart) -- drives the "DesignSync login needed" badge +
+   *  one-click /design-login button. Only ever set for DesignSync-using agents
+   *  (kanban #86c81120). */
+  designSyncAuthMissing: boolean
+  designSyncReason?: string
 }
 
 interface AgentDetail extends AgentSummary {
@@ -363,8 +370,16 @@ function getAgentSummary(name: string): AgentSummary {
   const runningSince = running ? getAgentRunningSince(name) : null
 
   // Reauth badge: only meaningful for a running session (a stopped agent has
-  // no pane to inspect). One capture-pane per running agent on the list poll.
-  const reauth = running ? detectReauthNeeded(capturePane(agentSessionName(name))) : { needsReauth: false }
+  // no pane to inspect). One capture-pane per running agent on the list poll,
+  // reused for the DesignSync auth badge below.
+  const pane = running ? capturePane(agentSessionName(name)) : null
+  const reauth = running ? detectReauthNeeded(pane) : { needsReauth: false }
+  const designSync = getDesignSyncAuthState(name, {
+    running,
+    runningSince,
+    pane,
+    nowUnixSec: Math.floor(Date.now() / 1000),
+  })
 
   return {
     name,
@@ -392,6 +407,8 @@ function getAgentSummary(name: string): AgentSummary {
     contextTokens: running ? readContextTokensFromProjectDir(dir, readAgentClaudeConfigDir(name) ?? undefined) : null,
     needsReauth: reauth.needsReauth,
     reauthReason: reauth.reason,
+    designSyncAuthMissing: designSync.authMissing,
+    designSyncReason: designSync.reason,
   }
 }
 
@@ -1422,6 +1439,29 @@ export async function tryHandleAgents(ctx: RouteContext, webDir: string): Promis
     } catch (err) {
       logger.error({ err, name }, 'Auth init failed')
       json(res, { error: 'Auth flow indítása sikertelen' }, 500)
+    }
+    return true
+  }
+
+  // POST /api/agents/:name/design-login -- run /design-login in the agent's
+  // tmux and record the login timestamp (kanban #86c81120). The dashboard is
+  // the authoritative source for "last successful login": recording it here
+  // clears the badge deterministically, without relying on scraping success
+  // text from the pane.
+  const designLoginMatch = path.match(/^\/api\/agents\/([^/]+)\/design-login$/)
+  if (designLoginMatch && method === 'POST') {
+    const name = decodeURIComponent(designLoginMatch[1])
+    if (!existsSync(agentDir(name))) { json(res, { error: 'Agent not found' }, 404); return true }
+    if (!isAgentRunning(name)) { json(res, { error: 'Agent is not running' }, 400); return true }
+    const session = agentSessionName(name)
+    const host = readAgentRemoteHost(name)
+    try {
+      sendPromptToSession(session, '/design-login', host)
+      recordDesignLogin(name, Math.floor(Date.now() / 1000))
+      json(res, { ok: true })
+    } catch (err) {
+      logger.error({ err, name }, 'design-login trigger failed')
+      json(res, { error: 'design-login indítása sikertelen' }, 500)
     }
     return true
   }

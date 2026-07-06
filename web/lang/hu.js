@@ -1127,6 +1127,12 @@ window._i18n.hu = {
   'agents.marveen_boss':         'Marveen Főnök',
   'agents.btn.login':            'Bejelentkezés',
 
+  // --- DesignSync auth badge (kanban #86c81120) ---
+  'agents.designsync.reason':        'DesignSync bejelentkezés szükséges',
+  'agents.btn.designlogin':          '/design-login',
+  'agents.designsync.btn_running':   'Küldés...',
+  'agents.designsync.toast_sent':    '/design-login elküldve az ágensnek - fejezd be a session-ben',
+
   // --- Agent model switch card ---
   'agents.model.card_title':     'Modell-váltás: {agent}',
   'agents.model.card_desc':      'Jelenlegi: {current}\nJavasolt: {suggested}\n\nIndoklás: {reason}',

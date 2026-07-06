@@ -1129,6 +1129,12 @@ window._i18n.en = {
   'agents.marveen_boss':         'Marveen Boss',
   'agents.btn.login':            'Login',
 
+  // --- DesignSync auth badge (kanban #86c81120) ---
+  'agents.designsync.reason':        'DesignSync login needed',
+  'agents.btn.designlogin':          '/design-login',
+  'agents.designsync.btn_running':   'Sending...',
+  'agents.designsync.toast_sent':    '/design-login sent to the agent - complete it in the session',
+
   // --- Agent model switch card ---
   'agents.model.card_title':     'Model switch: {agent}',
   'agents.model.card_desc':      'Current: {current}\nSuggested: {suggested}\n\nReason: {reason}',

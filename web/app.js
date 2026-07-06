@@ -2587,6 +2587,11 @@ function renderAgents() {
           <span class="agent-reauth-reason">${escapeHtml(agent.reauthReason || t('agents.reauth.reason'))}</span>
           <button class="btn-danger btn-compact agent-login-btn" data-phase="start">${t('agents.btn.login')}</button>
         </div>` : ''}
+      ${agent.designSyncAuthMissing ? `
+        <div class="agent-designsync-banner">
+          <span class="agent-designsync-reason">${escapeHtml(agent.designSyncReason || t('agents.designsync.reason'))}</span>
+          <button class="btn-secondary btn-compact agent-designlogin-btn">${t('agents.btn.designlogin')}</button>
+        </div>` : ''}
       <div class="agent-card-actions">
         <button class="btn-secondary btn-compact agent-conversation-btn" title="${t('agents.btn.conversation')}">
           <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
@@ -2601,6 +2606,10 @@ function renderAgents() {
     // Login button handler (start → confirm flow)
     card.querySelectorAll('.agent-login-btn').forEach(btn => {
       btn.addEventListener('click', (e) => { e.stopPropagation(); handleAgentLogin(agent.name, btn) })
+    })
+    // DesignSync /design-login button
+    card.querySelector('.agent-designlogin-btn')?.addEventListener('click', (e) => {
+      e.stopPropagation(); handleDesignLogin(agent.name, e.currentTarget)
     })
     // Terminal button
     card.querySelector('.agent-terminal-btn')?.addEventListener('click', (e) => {
@@ -11222,6 +11231,28 @@ async function handleAgentLogin(agentName, btn) {
     showToast('Hiba: ' + (e.message || e))
     btn.textContent = origText
     btn.dataset.phase = 'start'
+    btn.disabled = false
+  }
+}
+
+// === DesignSync /design-login trigger (kanban #86c81120) ===
+async function handleDesignLogin(agentName, btn) {
+  btn.disabled = true
+  const origText = btn.textContent
+  btn.textContent = t('agents.designsync.btn_running')
+  try {
+    const res = await fetch(`/api/agents/${encodeURIComponent(agentName)}/design-login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+    })
+    if (!res.ok) { const err = await res.json().catch(() => ({})); throw new Error(err.error || 'HTTP ' + res.status) }
+    showToast(t('agents.designsync.toast_sent'))
+    // The badge clears once the recorded login post-dates the session; give the
+    // command a moment to land, then refresh.
+    setTimeout(() => loadAgents(), 1500)
+  } catch (e) {
+    showToast('Hiba: ' + (e.message || e))
+    btn.textContent = origText
     btn.disabled = false
   }
 }
