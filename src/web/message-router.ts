@@ -32,6 +32,12 @@ const JANITOR_PARKED_MIN_AGE_MS = 45 * 1000
 // Log "skipping, target not ready" at most once per message id so a busy
 // receiver over many 5s ticks does not spam the log.
 const routerLoggedMisses: Set<number> = new Set()
+// Wakeup cooldown for the main agent: the router fires at most one
+// sendPromptToSession wakeup per COOLDOWN_MS window to avoid spamming the
+// channels session. 45s gives enough headroom that a normal turn (typically
+// 5-30s) ends and drain-inbox fires before we would retry.
+let lastMainAgentWakeupMs = 0
+const MAIN_AGENT_WAKEUP_COOLDOWN_MS = 45 * 1000
 
 // Why an inter-agent message was marked failed. The router only escalates
 // genuine delivery failures (the target was meant to receive it, but never
@@ -121,6 +127,7 @@ export async function runMessageRouterTick(): Promise<void> {
     // pattern. Ordering is preserved (oldest first) so nothing is starved.
     const pending = getPendingMessages().slice(0, MAX_MESSAGES_PER_TICK)
     const now = Date.now()
+    let mainAgentWakeupFiredThisTick = false
     for (const msg of pending) {
       const ageMs = now - msg.created_at * 1000
       // The main agent runs in `${MAIN_AGENT_ID}-channels`, not `agent-${name}`,
@@ -133,7 +140,25 @@ export async function runMessageRouterTick(): Promise<void> {
       // what stalled inter-agent delivery to the main agent for ~1h on a busy
       // day. Leave the message pending; the next main-agent turn claims it
       // atomically. Sub-agents keep the tmux-inject path (they have idle gaps).
-      if (isMainAgent) continue
+      //
+      // WAKEUP: without an active nudge the main agent only drains on the next
+      // user message or heartbeat -- up to 22+ min latency observed in prod.
+      // Fire one lightweight wakeup per cooldown window so an idle channels
+      // session starts a turn and drain-inbox claims the message immediately.
+      // Busy session: Claude Code queues the wakeup for the next turn boundary.
+      if (isMainAgent) {
+        if (!mainAgentWakeupFiredThisTick && now - lastMainAgentWakeupMs >= MAIN_AGENT_WAKEUP_COOLDOWN_MS) {
+          mainAgentWakeupFiredThisTick = true
+          lastMainAgentWakeupMs = now
+          try {
+            sendPromptToSession(MAIN_CHANNELS_SESSION, '[inbox-wakeup: pending inter-agent messages]', null, { waitForIdle: false })
+            logger.info({ msgId: msg.id }, 'message-router: main-agent wakeup fired')
+          } catch (err) {
+            logger.warn({ err }, 'message-router: main-agent wakeup injection failed')
+          }
+        }
+        continue
+      }
       const session = agentSessionName(msg.to_agent)
       // Remote sub-agents run their tmux session on the laptop; resolve the host
       // so the existence/readiness checks and the send all cross the ssh
@@ -232,8 +257,9 @@ export async function runMessageRouterTick(): Promise<void> {
       try {
         // channel-inbound carries the STT-applied deliveryContent; the agent
         // wrap (trusted/untrusted) carries the raw content. Single-source frame.
+        // msgId passed so receiving agents can write back via PUT /api/messages/:id.
         const content = isChannelInbound ? deliveryContent : msg.content
-        const { prefix, wrapped } = wrapAgentMessageForDelivery(category, safeFromAgent, msg.from_agent, content)
+        const { prefix, wrapped } = wrapAgentMessageForDelivery(category, safeFromAgent, msg.from_agent, content, msg.id)
         // Inline preamble so a fresh session (post hard-restart) doesn't miss
         // the context that explains the tag semantics.
         sendPromptToSession(session, prefix + wrapped, host)

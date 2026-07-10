@@ -36,6 +36,20 @@
   </script>
 </head>
 <body>
+  <!-- First-run onboarding wizard (shown by app.js when /api/onboarding/status needs setup) -->
+  <div class="modal-overlay onboarding-overlay" id="onboardingOverlay" hidden>
+    <div class="modal onboarding-modal">
+      <h2 data-i18n="onboarding.title">Marveen beállítása</h2>
+      <p class="onb-sub" data-i18n="onboarding.subtitle">Fejezd be a beállítást innen, a dashboardból -- SSH nélkül.</p>
+      <div class="onboarding-steps" id="onboardingSteps">
+        <div class="onboarding-step" data-ostep="1"><span class="onb-num">1</span> <span data-i18n="onboarding.step1.tab">Claude auth</span></div>
+        <div class="onboarding-step" data-ostep="2"><span class="onb-num">2</span> <span data-i18n="onboarding.step2.tab">Telegram bot</span></div>
+        <div class="onboarding-step" data-ostep="3"><span class="onb-num">3</span> <span data-i18n="onboarding.step3.tab">Párosítás</span></div>
+      </div>
+      <div id="onboardingBody" class="onboarding-body"></div>
+    </div>
+  </div>
+
   <div class="mobile-topbar">
     <button class="mobile-menu-btn" id="mobileMenuBtn" aria-label="Menü" aria-expanded="false">
       <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
@@ -216,7 +230,7 @@
       </div>
 
       <!-- Board-specific filter row (hidden when gantt active) -->
-      <div id="kanbanBoardFilters" style="margin-bottom:12px;display:flex;align-items:center;gap:8px;">
+      <div id="kanbanBoardFilters" style="margin-bottom:12px;display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
         <label for="kanbanProjectFilter" style="font-size:13px;color:var(--muted);white-space:nowrap;">Projekt:</label>
         <select id="kanbanProjectFilter" style="font-size:13px;padding:4px 8px;border-radius:6px;border:1px solid var(--border);background:var(--bg);color:var(--fg);min-width:140px;">
           <option value="">Mind</option>
@@ -227,6 +241,8 @@
           <option value="assignee" data-i18n="kanban.filter.group_assignee">Felelős szerint</option>
           <option value="priority" data-i18n="kanban.filter.group_priority">Prioritás szerint</option>
         </select>
+        <span id="kanbanColumnChipsLabel" style="font-size:13px;color:var(--muted);white-space:nowrap;margin-left:8px;" data-i18n="kanban.filter.columns_label">Oszlopok:</span>
+        <div id="kanbanColumnChips" style="display:flex;gap:4px;flex-wrap:wrap;align-items:center;"></div>
         <div class="kanban-quick-filters" id="kanbanQuickFilters" style="margin-left:auto; display:flex; gap:6px; flex-wrap:wrap; align-items:center;"></div>
       </div>
 
@@ -265,6 +281,14 @@
             <button class="kanban-add-btn" data-status="waiting" title="Új kártya">+</button>
           </div>
           <div class="kanban-col-body" data-status="waiting"></div>
+        </div>
+        <div class="kanban-col" data-status="testing">
+          <div class="kanban-col-header">
+            <span class="kanban-col-title">Tesztelés</span>
+            <span class="kanban-col-count" id="countTesting">0</span>
+            <button class="kanban-add-btn" data-status="testing" title="Új kártya">+</button>
+          </div>
+          <div class="kanban-col-body" data-status="testing"></div>
         </div>
         <div class="kanban-col" data-status="done">
           <div class="kanban-col-header">
@@ -1607,6 +1631,8 @@
       </div>
 
       <div id="updatesSummary" class="updates-summary"></div>
+
+      <div id="updatesDiagnose" class="updates-diagnose" hidden></div>
 
       <div class="updates-commits">
         <h3 data-i18n="tokenUsage.changes_title">Változások</h3>
