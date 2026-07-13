@@ -1,12 +1,66 @@
 # HomeLab Control Plane -- Plan (kanban #193)
 
-Status: PLAN ONLY. Nothing in this doc is deployed. Build starts only after
-Jocoo signs off and explicitly says to go.
+Status: BUILD IN PROGRESS. Jocoo answered all 5 open questions and gave the
+explicit go-ahead (2026-07-13 evening, relayed via Cuzcoo 2026-07-14). See
+Revision 3 below for the answers and how they changed the design.
 
 Revision 2 (2026-07-14): synthesizes Yzma's data-source review (credit/
 subscription monitoring feasibility) and Chicha's UX review (daily-use
 layout) into the original stack decision. Superseded per-reviewer sections
 have been folded in below rather than kept as separate addenda.
+
+## Revision 3 (2026-07-14): Jocoo's answers, build starts
+
+Jocoo answered all 5 open questions from Revision 2:
+
+1. **Host**: runs on the Marveen machine, but must be designed portable --
+   no host-bound config baked into committed files. All host-specific
+   values (Tailscale IP/hostname, ports) live in a gitignored `.env`; the
+   committed compose file and Homepage config reference them via variables,
+   never hardcoded. Moving to a new host is: copy the repo, write a new
+   `.env`, `docker compose up`.
+2. **Project list**: confirmed, plus add **Scouts** (a separate
+   inventory-management solution is being built for it, see
+   [[project-scouts]] -- comes later, but the tile slot exists now so
+   nothing needs re-wiring when it lands).
+3. **docker-socket-proxy**: yes, goes in front of Portainer. Portainer
+   never touches `/var/run/docker.sock` directly -- only the proxy
+   container does (read-only mount), and it exposes a filtered subset of
+   the Docker API (containers, images, networks, volumes; POST enabled for
+   start/stop/restart) over an internal-only Docker network. Homepage's
+   status-dot widget also routes through the same proxy instead of getting
+   its own docker.sock mount -- one socket-holding container instead of
+   two.
+4. **Credit/subscription monitoring -- re-scoped**: Jocoo's real concern
+   isn't org-level month-to-date spend or Claude Max/Pro subscription
+   state. It's **prepaid/topup-style accounts that can run out and block
+   work**: Replicate's account balance, and the Claude/Anthropic API key
+   that's built into CrochetTool specifically (a separate pay-as-you-go
+   key, not part of the Max/Pro subscription). Those are the ones that can
+   actually stop him mid-task if they run dry, so those get the visibility
+   budget, not the org-wide number.
+
+   Follow-up research done: **the Admin Usage API
+   (`/v1/organizations/usage_report/messages`) supports `api_key_ids[]` as
+   a filter/group-by dimension** -- so CrochetTool's specific Anthropic key
+   can be isolated from the rest of the org's spend, using the same
+   org-level Admin API key filtered down to that one `api_key_id`. This
+   changes the buildable widget from "org MTD spend" to "CrochetTool key's
+   own MTD spend" -- more relevant to the actual question, but it is
+   **still spend, not remaining balance** -- there is no balance/credit-
+   endpoint for any key, scoped or not. A rising spend number tells you
+   *how fast* the key is burning, not *how much runway is left*, unless
+   Jocoo also tells the widget how much was loaded onto that key. Given
+   that, the honest deliverable is: CrochetTool-key spend (near-live, via
+   Admin API filtered by its `api_key_id`) **plus** a manual "loaded: $X on
+   DATE" field next to it, so the two together approximate runway. Same
+   graceful-degradation shape as Replicate (which still has zero balance
+   API of any kind -- link-out + manual field, unchanged from Revision 2).
+5. **Admin API key**: yes, Jocoo will generate one when needed and wants
+   instructions at that point. Not required to start the build -- the
+   compose stack, Homepage, Portainer, and docker-socket-proxy don't depend
+   on it. It only gates the CrochetTool-key spend widget in Services &
+   Credits, which can ship after the base stack is up.
 
 ## Context
 
@@ -78,170 +132,199 @@ Design points behind this:
   with nothing behind it). Per "no dead links on launch," the docs link is
   dropped from Hame's tile until a stub is written -- see Next steps.
 
-## Services & Credits (feasibility-checked, per Yzma + Chicha)
+## Services & Credits (re-scoped per Jocoo's answer 4, Revision 3)
 
-Both reviews independently checked whether a live credit gauge is buildable
-against each provider's actual API surface before designing anything, and
-landed on the same conclusion: **no provider exposes a real-time balance
-API today.** Design for graceful degradation, not a faked live number.
+Original feasibility check (Yzma + Chicha, Revision 2) still stands: **no
+provider exposes a real-time balance API today.** What changed is *which*
+number matters. Jocoo's actual concern is prepaid/topup accounts running
+dry mid-task, not org MTD spend or Max/Pro state -- so the widget budget
+goes to Replicate and CrochetTool's own Anthropic key, not the org-wide
+number.
 
-**Anthropic (Claude API console spend)**
-- Admin `usage_report` / `cost_report` endpoints exist (~5 min lag on spend
-  data), but there is **no credit-balance endpoint** -- an org-level Admin
-  API key can show *month-to-date spend*, not remaining credit.
-- This only covers **API-console usage**. The **Claude Max/Pro
-  subscription** has no billing API at all.
-- Buildable now: a `customapi` widget on the cost-report endpoint, labelled
-  clearly as *API spend*, not *credit remaining* and not *subscription
-  state*.
-- Requires generating and storing an org-level Admin API key -- treat it as
-  a secret exactly like `store/.dashboard-token` (env var / secrets file),
-  never plain YAML in the Homepage config.
+**CrochetTool's Anthropic API key (its own pay-as-you-go key, separate from
+Jocoo's Max/Pro subscription)**
+- Confirmed buildable: the Admin Usage API
+  (`/v1/organizations/usage_report/messages`) accepts `api_key_ids[]` as a
+  filter -- so CrochetTool's key's spend can be isolated from the rest of
+  the org, using the org-level Admin API key filtered to that one
+  `api_key_id`. (Retrieve the ID once via the List API Keys endpoint.)
+- Still **spend, not balance** -- there is no credit-remaining endpoint for
+  any key, org-wide or scoped. Spend rising tells you burn rate, not
+  runway.
+- Buildable widget: CrochetTool-key MTD spend (near-live, ~5 min lag) +
+  a manual "loaded: $X on DATE" field next to it, so the two together
+  approximate remaining runway. Label clearly as *spend*, not *balance*.
+- Requires the org-level Admin API key (Jocoo's answer 5: generate when
+  needed). Store as a secret exactly like `store/.dashboard-token` --
+  never inline in the Homepage YAML.
 
-**Replicate**
-- No public balance or spend-limit endpoint. Balance is only visible on
-  `replicate.com/account/billing` after login. Session-scraping a logged-in
-  cookie was considered and rejected -- fragile and a ToS risk for a
-  homelab convenience feature.
-- Realistic tile: **link-out to the billing page**, no live number. If
-  Jocoo wants a number anyway, a manually-updated field ("last known
-  balance: $X on DATE") is the only honest option until Replicate ships an
-  API.
+**Replicate** -- unchanged from Revision 2: no public balance or
+spend-limit endpoint at all. Link-out to `replicate.com/account/billing`
+plus an optional manual "last known balance: $X on DATE" field.
 
-**Layout placement**: a compact **Services & Credits** strip in the top
-info bar (favicon + one line each), separate from the project tiles below
-it -- financial/subscription data reads differently from service-up-or-down
-status, so it gets its own row rather than being mixed into project tiles.
-Anthropic gets the near-live spend widget; Replicate (and Claude
-Max/Pro subscription state, if tracked at all) gets a bookmark tile plus
-optional manual field.
+**Claude Max/Pro subscription state** -- dropped from the widget scope per
+Jocoo's answer 4 (not what he's worried about; no billing API exists for
+it anyway). Anthropic Console stays as a link-out tile if wanted, no
+number attached.
 
-**Other providers, only if it becomes relevant later**: GitHub Actions
-minutes has a real billing API (`/repos/{owner}/{repo}/actions/billing`) if
-ever a bottleneck. Tailscale/domains are flat-fee -- no balance to track,
-a renewal-date tile is enough if wanted at all.
+**Layout placement**: unchanged -- a compact **Services & Credits** strip
+in the top info bar, separate from project tiles (financial data reads
+differently from service-up/down status).
 
-## Proposed stack (sketch, not deployed)
+## Portable stack (deployed at `homelab/` in this repo)
+
+Design goal from Jocoo's answer 1: runs on the Marveen machine today, but
+nothing in the committed files is host-bound. Host-specific values
+(Tailscale IP/hostname, port overrides) live in a gitignored `.env`; the
+compose file and Homepage config read them via variables. Moving host =
+copy the repo + write a new `.env` + `docker compose up`.
 
 ```yaml
-# docker-compose.yml -- homelab control plane
+# homelab/docker-compose.yml
 services:
-  homepage:
-    image: ghcr.io/gethomepage/homepage:latest
-    container_name: homepage
-    ports:
-      - "127.0.0.1:3000:3000"   # Tailscale-only, see Access below
+  docker-socket-proxy:
+    image: tecnativa/docker-socket-proxy:latest
+    container_name: homelab-docker-socket-proxy
+    environment:
+      CONTAINERS: 1
+      IMAGES: 1
+      NETWORKS: 1
+      VOLUMES: 1
+      INFO: 1
+      PING: 1
+      VERSION: 1
+      POST: 1   # required for Portainer start/stop/restart
     volumes:
-      - ./homepage-config:/app/config
-      - ./homepage-icons:/app/public/icons
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    networks: [homelab-internal]
     restart: unless-stopped
 
   portainer:
     image: portainer/portainer-ce:latest
-    container_name: portainer
+    container_name: homelab-portainer
+    command: ["-H", "tcp://docker-socket-proxy:2375"]
     ports:
-      - "127.0.0.1:9000:9000"   # Tailscale-only, see Access below
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock
-      - portainer-data:/data
+      - "127.0.0.1:${PORTAINER_PORT:-9000}:9000"
+    volumes: [portainer-data:/data]
+    networks: [homelab-internal]
+    depends_on: [docker-socket-proxy]
     restart: unless-stopped
+
+  homepage:
+    image: ghcr.io/gethomepage/homepage:latest
+    container_name: homelab-homepage
+    ports:
+      - "127.0.0.1:${HOMEPAGE_PORT:-3000}:3000"
+    volumes:
+      - ./homepage-config:/app/config
+      - ./homepage-icons:/app/public/icons
+    networks: [homelab-internal]
+    depends_on: [docker-socket-proxy]
+    restart: unless-stopped
+
+networks:
+  homelab-internal:
+    driver: bridge
 
 volumes:
   portainer-data:
 ```
 
-## Homepage config sketch (`homepage-config/services.yaml`)
+**Docker-socket-proxy in front of Portainer (Jocoo's answer 3)**: neither
+Portainer nor Homepage mounts `/var/run/docker.sock` directly -- only the
+proxy container does, read-only, and it exposes a filtered Docker API
+(containers/images/networks/volumes, `POST` enabled for start/stop/restart)
+over an internal-only Docker network with no host port published.
+Homepage's status-dot widget also points at the proxy (`homelab-docker-
+socket-proxy:2375`) instead of getting its own socket mount -- one
+socket-holding container in the whole stack, not two or three.
+
+Host-specific values go in `homelab/.env` (gitignored; `.env.example`
+checked in as the template): `TAILSCALE_HOST`, `HOMEPAGE_PORT`,
+`PORTAINER_PORT`. `services.yaml` references them via Homepage's
+`{{HOMEPAGE_VAR_*}}` substitution, never as literal IPs.
+
+## Homepage config (`homelab/homepage-config/services.yaml`)
 
 ```yaml
 - Attention / active dev:
     - CrochetTool:
-        href: http://<tailscale-ip>:8420
+        href: http://{{HOMEPAGE_VAR_TAILSCALE_HOST}}:8420
         description: AI pattern-designer tool (dev)
         docs: /docs/crochet-pattern-tool
-        widget:
-          type: docker
-          container: crochettool   # status dot
+        widget: {type: docker, server: homelab-proxy, container: crochet-tool-crochet-tool-1}
         # + deep link to this stack's Portainer view and its logs view
 
 - Running services:
     - Marveen Dashboard:
-        href: http://<tailscale-ip>:3420
+        href: http://{{HOMEPAGE_VAR_TAILSCALE_HOST}}:3420
         description: Agent fleet, kanban, memory
-        widget:
-          type: customapi
-          url: http://<tailscale-ip>:3420/api/health
+        widget: {type: customapi, url: "http://{{HOMEPAGE_VAR_TAILSCALE_HOST}}:3420/api/health"}
 
     - Offsider:
-        href: http://<tailscale-ip>:<port>
+        href: http://{{HOMEPAGE_VAR_TAILSCALE_HOST}}:<port>
         description: SMB fleet product
         docs: /docs/smb-offsider
+        # not yet dockerized -- no status-dot widget or Portainer link until it is
+
+    - Scouts:
+        href: "#"
+        description: Northern Beaches Cairns QLD -- inventory-management solution in progress
+        docs: /docs/scouts
+        # placeholder tile only; nothing running yet, see [[project-scouts]]
 
 - Occasional / hardware:
     - Hame Remote:
-        href: http://<tailscale-ip>:<port>
+        href: http://{{HOMEPAGE_VAR_TAILSCALE_HOST}}:<port>
         description: Speaker/amp remote control unit
         # no docs link yet -- stub not written, see Next steps
 
 - Control & billing:
     - Portainer:
-        href: http://<tailscale-ip>:9000
+        href: http://{{HOMEPAGE_VAR_TAILSCALE_HOST}}:{{HOMEPAGE_VAR_PORTAINER_PORT}}
         description: Full container/stack control
-    - Anthropic Console:
-        href: https://console.anthropic.com/settings/billing
-        description: MTD API spend (see Services & Credits widget above)
+    - CrochetTool Anthropic key spend:
+        widget: {type: customapi, url: "https://api.anthropic.com/v1/organizations/usage_report/messages?api_key_ids[]=<key-id>&bucket_width=1d"}
+        description: "MTD spend for CrochetTool's own key (not balance -- see Services & Credits)"
     - Replicate Billing:
         href: https://replicate.com/account/billing
         description: Balance -- no live number available, link-out only
 ```
 
-Each project tile carries a status dot, its docs link (where one exists),
-and a deep link into its own Portainer stack + logs -- not one generic
-"Portainer" bookmark you then navigate inside.
+Each project tile carries a status dot (where dockerized), its docs link
+(where one exists), and a deep link into its own Portainer stack + logs --
+not one generic "Portainer" bookmark you then navigate inside.
 
 ## Access / security
 
-- Both services bind to `127.0.0.1` only in the compose file above; the
-  only external path in is Tailscale, same pattern already used for other
-  homelab-style services (see [[reference-tailscale-same-host-hairpin]]).
-  No port gets exposed on `0.0.0.0`.
+- Homepage and Portainer bind to `127.0.0.1` only; the only external path
+  in is Tailscale, same pattern already used for other homelab-style
+  services (see [[reference-tailscale-same-host-hairpin]]). No port gets
+  exposed on `0.0.0.0`.
 - Portainer gets its own login (set on first run) -- separate from any
   Marveen dashboard token.
-- `docker.sock` mount is the one real risk in this design: whoever can
-  reach Portainer can control every container on the host, including
-  Marveen's own. Mitigate by keeping Portainer reachable only over
-  Tailscale and behind its own auth, never on a LAN-wide or public bind.
-- The Anthropic Admin API key (if Jocoo opts into the spend widget) is a
-  second secret to manage with the same care -- never inline in the
-  Homepage YAML, same handling as `store/.dashboard-token`.
+- `docker.sock` is mounted read-only into exactly one container
+  (docker-socket-proxy); Portainer and Homepage reach it only through the
+  proxy's filtered API on the internal Docker network. Whoever reaches
+  Portainer can still start/stop containers (including Marveen's own) --
+  that's the point of Portainer -- but they can't do anything the proxy's
+  env-var allowlist doesn't expose (no EXEC by default, no swarm/service
+  endpoints).
+- The Anthropic Admin API key (once generated per answer 5) is a secret
+  managed with the same care as `store/.dashboard-token` -- env var /
+  secrets file, never inline in the Homepage YAML.
 
-## Open questions for Jocoo
+## Next steps
 
-1. Which host runs this? (Same box as Marveen, or a separate machine?)
-2. Confirm the project list (Marveen, CrochetTool, Offsider, Hame) --
-   anything missing, or anything that shouldn't be listed yet?
-3. OK with Portainer holding `docker.sock` given the mitigation above, or
-   do you want it scoped further (e.g. a docker-socket-proxy in front of
-   it, read-only where possible)?
-4. Credit tracking, which number do you actually want on screen: the
-   month-to-date **API-console spend** (buildable now via the Anthropic
-   cost API, near-live), or the **Claude Max/Pro subscription** state (no
-   API exists -- would be a manual "last known" field plus a link out)?
-   Replicate is link-out plus optional manual field either way.
-5. If you want the Anthropic spend widget: are you willing to generate an
-   org-level Admin API key for it, understanding it will be stored as a
-   secret (like `store/.dashboard-token`), not in plain YAML?
-
-## Next steps (after go-ahead only)
-
-1. Stand up the compose stack on the chosen host.
-2. Write `homepage-config/services.yaml` for real, with real ports/URLs
-   and per-project Portainer deep links.
-3. Point Homepage docs links at this repo's `docs/<project>/` folders.
+1. ~~Stand up the compose stack on the chosen host.~~ -- done, see below.
+2. ~~Write `homepage-config/services.yaml` for real~~ -- done with
+   placeholders for ports not yet confirmed (Offsider, Hame).
+3. Point Homepage docs links at this repo's `docs/<project>/` folders --
+   done for the projects with existing docs.
 4. Write a minimal Hame docs stub before launch so its tile isn't a dead
-   link (or leave the docs field off entirely, per the sketch above).
-5. If Q4/Q5 above land on "yes, build the Anthropic spend widget":
-   generate the Admin API key, store it as a secret, wire the
-   `customapi` widget to the cost-report endpoint.
-6. Smoke test: start/stop one container (e.g. CrochetTool) via Portainer,
-   confirm Homepage's status dot reflects it.
+   link (or leave the docs field off entirely) -- still open.
+5. Generate the Anthropic Admin API key when Jocoo is ready (answer 5) --
+   not blocking; the base stack doesn't need it.
+6. Smoke test: start/stop CrochetTool via Portainer, confirm Homepage's
+   status dot reflects it.
 7. Screenshot + Telegram sign-off before calling it done.

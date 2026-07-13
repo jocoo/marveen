@@ -1,0 +1,17 @@
+title: HomeLab
+theme: dark
+color: slate
+headerStyle: boxed
+layout:
+  Attention / active dev:
+    style: row
+    columns: 4
+  Running services:
+    style: row
+    columns: 4
+  Occasional / hardware:
+    style: row
+    columns: 4
+  Control & billing:
+    style: row
+    columns: 4
