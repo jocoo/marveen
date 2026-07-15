@@ -23,6 +23,7 @@ services:
     command: ["-H", "tcp://docker-socket-proxy:2375"]
     ports:
       - "127.0.0.1:${PORTAINER_PORT:-9000}:9000"
+      - "${TAILSCALE_HOST}:${PORTAINER_PORT:-9000}:9000"
     volumes:
       - portainer-data:/data
     networks:
@@ -36,6 +37,7 @@ services:
     container_name: homelab-homepage
     ports:
       - "127.0.0.1:${HOMEPAGE_PORT:-3000}:3000"
+      - "${TAILSCALE_HOST}:${HOMEPAGE_PORT:-3000}:3000"
     environment:
       HOMEPAGE_VAR_TAILSCALE_HOST: ${TAILSCALE_HOST}
       HOMEPAGE_VAR_PORTAINER_PORT: ${PORTAINER_PORT:-9000}
