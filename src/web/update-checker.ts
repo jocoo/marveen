@@ -1,5 +1,6 @@
 import { execFileSync } from 'node:child_process'
 import { PROJECT_ROOT } from '../config.js'
+import { TOOL_TIMEOUTS } from '../tool-timeouts.js'
 
 export interface UpdateCommit {
   sha: string
@@ -125,14 +126,14 @@ const GH_HEADERS = { 'Accept': 'application/vnd.github+json', 'User-Agent': 'mar
 // sentinel { notFound: true } on a 404 (base or head not on the remote), or
 // null on any other failure.
 async function fetchCompare(remote: string, base: string, head: string): Promise<GhCompare | { notFound: true } | null> {
-  const res = await fetch(`https://api.github.com/repos/${remote}/compare/${base}...${head}`, { headers: GH_HEADERS })
+  const res = await fetch(`https://api.github.com/repos/${remote}/compare/${base}...${head}`, { headers: GH_HEADERS, signal: AbortSignal.timeout(TOOL_TIMEOUTS['github']) })
   if (res.ok) return await res.json() as GhCompare
   if (res.status === 404) return { notFound: true }
   return null
 }
 
 async function fetchLatestSha(remote: string): Promise<string> {
-  const res = await fetch(`https://api.github.com/repos/${remote}/commits/main`, { headers: GH_HEADERS })
+  const res = await fetch(`https://api.github.com/repos/${remote}/commits/main`, { headers: GH_HEADERS, signal: AbortSignal.timeout(TOOL_TIMEOUTS['github']) })
   if (!res.ok) throw new Error(`GitHub /commits/main -> ${res.status}`)
   const body = await res.json() as { sha?: string }
   if (!body.sha) throw new Error('No sha on commits/main response')
