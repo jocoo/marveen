@@ -62,6 +62,15 @@ function keychainHasClaudeCredentials(): boolean {
 function claudeAuthPresent(): boolean {
   if (readEnvValue('CLAUDE_CODE_OAUTH_TOKEN')) return true
   if (readEnvValue('ANTHROPIC_API_KEY')) return true
+  // Fleet auth path: sub-agent launches (and the credentials guard) authenticate
+  // through store/.claude-oauth-token, and CLAUDE_CREDENTIALS_GUARD renames
+  // ~/.claude/.credentials.json to .bak -- so neither env leg above nor the
+  // credentials.json leg below sees the credential. Without this check a fully
+  // authenticated fleet reads as logged-out and the wizard re-nags on every
+  // fresh load. Presence-only (non-empty), fail-closed, like the other legs.
+  try {
+    if (readFileSync(FLEET_TOKEN_FILE, 'utf-8').trim().length > 0) return true
+  } catch { /* no fleet token file */ }
   try {
     const d = JSON.parse(readFileSync(HOME_CREDENTIALS, 'utf-8')) as {
       claudeAiOauth?: { accessToken?: string }; apiKey?: string
