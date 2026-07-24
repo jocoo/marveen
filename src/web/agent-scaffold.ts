@@ -318,12 +318,17 @@ export function writeAgentSettingsFromProfile(name: string, profile: ProfileTemp
   // hooks. Re-applied on every spawn (this function regenerates settings.json),
   // so they survive respawns. (a) email-send block -- outbound email routes
   // through the main agent. (b) self-pace block -- no ScheduleWakeup/Cron*/Bash
-  // self-injection. The MAIN_AGENT_ID is exempt from both. Merge/deploy is NOT
-  // gated: the operator authorizes those autonomously (so test/deploy runs are
-  // never blocked); the actual incident vector -- an agent answering its OWN
-  // posed question -- is covered by the self-pace block + the #0 CLAUDE.md doctrine.
+  // self-injection. (c) egress gate -- WebFetch calls that are not on the known
+  // API allowlist are hard-blocked and logged; arbitrary web content must go
+  // through the quarantine-reader sub-agent. The MAIN_AGENT_ID is exempt from
+  // (a) and (b) but NOT from (c) -- every agent can be hijacked via an injected
+  // WebFetch call, including the main one. Merge/deploy is NOT gated: the operator
+  // authorizes those autonomously (so test/deploy runs are never blocked); the
+  // actual incident vector -- an agent answering its OWN posed question -- is
+  // covered by the self-pace block + the #0 CLAUDE.md doctrine.
   if (agentGetsEmailGate(name)) injectEmailSendGate(existing)
   if (agentGetsGovernanceGates(name)) injectSelfPaceGate(existing)
+  injectEgressGate(existing)
   atomicWriteFileSync(settingsPath, JSON.stringify(existing, null, 2))
 }
 
@@ -390,6 +395,79 @@ export function injectSelfPaceGate(existing: Record<string, unknown>): void {
     ...prev.filter((e) => !JSON.stringify(e).includes('self-pace-gate.mjs')),
     entry,
   ]
+}
+
+// Idempotently wire the egress-gate PreToolUse hook (hard-blocks WebFetch to
+// any URL not on the known API allowlist, logs blocked calls). Applied to ALL
+// agents including MAIN_AGENT_ID -- the hook defends against prompt-injection
+// that exfiltrates data via an outbound WebFetch, and the main agent faces the
+// same risk as sub-agents. Same dedupe shape as the other gate injectors.
+export function injectEgressGate(existing: Record<string, unknown>): void {
+  const hooks = (existing.hooks && typeof existing.hooks === 'object'
+    ? existing.hooks
+    : (existing.hooks = {})) as Record<string, unknown>
+  const command = `node ${join(PROJECT_ROOT, 'scripts', 'hooks', 'egress-gate.mjs')}`
+  // Registration guard: a /tmp or missing path must never enter shared settings.
+  if (isUnsafeHookCommand(command)) return
+  const entry = {
+    matcher: 'WebFetch',
+    hooks: [{ type: 'command', command, timeout: 10 }],
+  }
+  const prev = Array.isArray(hooks.PreToolUse) ? (hooks.PreToolUse as unknown[]) : []
+  hooks.PreToolUse = [
+    ...prev.filter((e) => !JSON.stringify(e).includes('egress-gate.mjs')),
+    entry,
+  ]
+}
+
+// Idempotent migration: ensure every agent's settings.json carries the egress
+// gate hook. Called at server startup (alongside ensureAgentStalenessHook) so
+// the hook is applied to both existing and newly-created agents without a full
+// respawn. Returns true if the file was updated, false if already wired.
+export function ensureEgressGate(name: string): boolean {
+  const settingsPath = agentSettingsPath(name)
+  let settings: Record<string, unknown> = {}
+  if (existsSync(settingsPath)) {
+    try { settings = JSON.parse(readFileSync(settingsPath, 'utf-8')) } catch { return false }
+  }
+  const command = `node ${join(PROJECT_ROOT, 'scripts', 'hooks', 'egress-gate.mjs')}`
+  const hooks = (settings.hooks && typeof settings.hooks === 'object')
+    ? settings.hooks as Record<string, unknown>
+    : {}
+  const ptu = Array.isArray(hooks.PreToolUse) ? hooks.PreToolUse as unknown[] : []
+  // Idempotency: already wired if any entry references the egress-gate script.
+  if (JSON.stringify(ptu).includes('egress-gate.mjs')) return false
+  if (isUnsafeHookCommand(command)) return false
+  injectEgressGate(settings)
+  if (name !== MAIN_AGENT_ID) mkdirSync(join(agentDir(name), '.claude'), { recursive: true })
+  atomicWriteFileSync(settingsPath, JSON.stringify(settings, null, 2))
+  return true
+}
+
+// Deploy the quarantine-reader sub-agent definition to an agent's
+// .claude/agents/ directory. The template lives in templates/agents/ (tracked
+// in git); sub-agent definitions under agents/ are gitignored at runtime.
+// Idempotent: only writes when the file is absent or the template is newer.
+// Returns true if the file was written, false if already up-to-date.
+export function ensureQuarantineReader(name: string): boolean {
+  const tplPath = join(PROJECT_ROOT, 'templates', 'sub-agents', 'quarantine-reader.md')
+  if (!existsSync(tplPath)) return false
+  let destDir: string
+  if (name === MAIN_AGENT_ID) {
+    destDir = join(homedir(), '.claude', 'agents')
+  } else {
+    destDir = join(agentDir(name), '.claude', 'agents')
+  }
+  mkdirSync(destDir, { recursive: true })
+  const destPath = join(destDir, 'quarantine-reader.md')
+  // Idempotency: already deployed when file exists and matches the template.
+  if (existsSync(destPath)) {
+    try {
+      if (readFileSync(destPath, 'utf-8') === readFileSync(tplPath, 'utf-8')) return false
+    } catch { /* fall through to re-write */ }
+  }
+  copyFileSync(tplPath, destPath)
+  return true
 }
 
 // Copy the repo's `scheduled-tasks/<task>/task-config.json` to the
@@ -460,8 +538,14 @@ export function scaffoldAgentDir(name: string) {
   const dir = agentDir(name)
   mkdirSync(join(dir, '.claude', 'skills'), { recursive: true })
   mkdirSync(join(dir, '.claude', 'hooks'), { recursive: true })
+  mkdirSync(join(dir, '.claude', 'agents'), { recursive: true })
   mkdirSync(channelStateDir(CHANNEL_PROVIDER, dir), { recursive: true })
   mkdirSync(join(dir, 'memory'), { recursive: true })
+
+  // Deploy the quarantine-reader sub-agent definition from the template so every
+  // scaffolded agent can use it for safe web/RSS fetching without calling WebFetch
+  // directly in the main context (where untrusted content would run as instructions).
+  ensureQuarantineReader(name)
 
   // Initialize empty files if they don't exist
   const memoryMd = join(dir, 'memory', 'MEMORY.md')
@@ -504,6 +588,12 @@ const FLEET_ROSTER_END = '<!-- END GENERATED: fleet-roster -->'
 // END in the file, eating unrelated content in between.
 const FLEET_ROSTER_BLOCK_RE = new RegExp(
   `${FLEET_ROSTER_BEGIN.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}[\\s\\S]*?${FLEET_ROSTER_END.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`,
+)
+
+const AUTONOMY_BEGIN = '<!-- BEGIN GENERATED: autonomy-wiring (auto-generated, do not edit by hand) -->'
+const AUTONOMY_END = '<!-- END GENERATED: autonomy-wiring -->'
+const AUTONOMY_BLOCK_RE = new RegExp(
+  `${AUTONOMY_BEGIN.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}[\\s\\S]*?${AUTONOMY_END.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`,
 )
 
 // Builds the text body that goes between the BEGIN/END markers.
@@ -571,6 +661,68 @@ function buildFleetRosterBody(selfName: string): string {
     '',
     'Ha egy kérés egyértelműen más szakterületére esik, jelezd vagy delegáld inter-agent üzenettel a megfelelő ágensnek.',
   ].join('\n')
+}
+
+// Builds the autonomy-wiring section body. Static per agent name: the content
+// never changes based on runtime fleet state, but the curl examples embed the
+// resolved dashboard origin and the agent's own name so agents don't have to
+// guess.
+function buildAutonomyBody(name: string): string {
+  return [
+    '## Autonómia és jóváhagyás',
+    '',
+    'Az autonóm műveletek fokozatait a store/autonomy-config.json szabályozza (level: 1=csak jelez, 2=javasol+jóváhagyás, 3=autonóm+jelent). Mielőtt önállóan cselekszel, nézd meg az adott kategória szintjét.',
+    '',
+    '**Level 1 (csak jelez)**: küldj inter-agent értesítést a főágensnek, de NE végezd el a műveletet. Ezután ÁLLJ MEG.',
+    `curl -s -X POST ${dashboardOrigin}/api/messages -H "Content-Type: application/json" -H "Authorization: Bearer $(cat store/.dashboard-token)" -d "{\\"from\\":\\"${name}\\",\\"to\\":\\"${MAIN_AGENT_ID}\\",\\"content\\":\\"[FELHÍVÁS] CATEGORY_KEY: MIT akartam elvégezni, de level 1 miatt csak jelzek.\\"}"`,
+    '',
+    '**Level 2 (jóváhagyás szükséges)**: kérj jóváhagyást az API-n MIELŐTT cselekszel.',
+    '',
+    'Jóváhagyás kérése (POST):',
+    `curl -s -X POST ${dashboardOrigin}/api/approvals -H "Content-Type: application/json" -H "Authorization: Bearer $(cat store/.dashboard-token)" -d '{"agent_id":"${name}","category":"CATEGORY_KEY","action_description":"Mit tervezel elvégezni és miért","timeout_seconds":3600}'`,
+    'A válaszban kapott id-vel kérdezheted le a döntést.',
+    '',
+    'Döntés lekérdezése (GET, 60 mp-enként ismételve):',
+    `curl -s -H "Authorization: Bearer $(cat store/.dashboard-token)" "${dashboardOrigin}/api/approvals/<id>"`,
+    'status=approved -> végezd el a műveletet. status=rejected vagy status=timeout -> ne csináld, naplózd az okot.',
+    '',
+    '**Level 3 (autonóm)**: elvégzed a műveletet, majd utána jelented a főágensnek.',
+  ].join('\n')
+}
+
+// Idempotently ensures the autonomy-wiring block is present and current in the
+// agent's CLAUDE.md. Called on every startAgentProcess() alongside
+// ensureFleetRosterSection() so that existing agents receive the block
+// automatically on respawn without manual migration.
+//
+// Idempotency contract mirrors ensureFleetRosterSection (five rules apply).
+export function ensureAutonomySection(name: string): void {
+  // The main agent's CLAUDE.md lives at PROJECT_ROOT, not inside agents/<name>/.
+  // Sub-agents use agentDir(name)/CLAUDE.md as usual.
+  const claudeMdPath = name === MAIN_AGENT_ID
+    ? join(PROJECT_ROOT, 'CLAUDE.md')
+    : join(agentDir(name), 'CLAUDE.md')
+  if (!existsSync(claudeMdPath)) return
+
+  const body = buildAutonomyBody(name)
+  const block = `${AUTONOMY_BEGIN}\n${body}\n${AUTONOMY_END}`
+
+  let existing: string
+  try {
+    existing = readFileSync(claudeMdPath, 'utf-8')
+  } catch {
+    return
+  }
+
+  let updated: string
+  if (AUTONOMY_BLOCK_RE.test(existing)) {
+    updated = existing.replace(AUTONOMY_BLOCK_RE, block)
+  } else {
+    updated = existing.trimEnd() + '\n\n' + block + '\n'
+  }
+
+  if (updated === existing) return
+  atomicWriteFileSync(claudeMdPath, updated)
 }
 
 // Idempotently ensures the fleet roster block is present and current in the
@@ -759,11 +911,14 @@ Output ONLY the markdown content, no code fences.`
   if (cleaned.startsWith('```')) {
     cleaned = cleaned.replace(/^```\w*\n?/, '').replace(/\n?```$/, '')
   }
-  // Append the marker-delimited fleet roster block using the same
-  // buildFleetRosterBody() as ensureFleetRosterSection() -- single source of truth.
-  // Appended after LLM output so the model never sees or can rewrite it.
-  const body = buildFleetRosterBody(name)
-  cleaned = cleaned.trimEnd() + '\n\n' + FLEET_ROSTER_BEGIN + '\n' + body + '\n' + FLEET_ROSTER_END + '\n'
+  // Append marker-delimited sections after LLM output so the model can never
+  // see or rewrite them. Single source of truth: same builders as the
+  // ensure*Section() functions used on every subsequent respawn.
+  const fleetBody = buildFleetRosterBody(name)
+  const autonomyBody = buildAutonomyBody(name)
+  cleaned = cleaned.trimEnd()
+    + '\n\n' + FLEET_ROSTER_BEGIN + '\n' + fleetBody + '\n' + FLEET_ROSTER_END
+    + '\n\n' + AUTONOMY_BEGIN + '\n' + autonomyBody + '\n' + AUTONOMY_END + '\n'
   return cleaned
 }
 
@@ -807,6 +962,10 @@ Generate a personality definition that includes:
 - Unique quirks or characteristics
 - What it should avoid
 
+IMPORTANT FORMATTING RULES:
+- Write ALL Hungarian text with proper accents (á, é, í, ó, ö, ő, ú, ü, ű). NEVER write Hungarian without accents.
+- Never use em dash (—), only simple hyphen (-).
+
 Make the personality distinctive but professional.
 Output ONLY the markdown content, no code fences.`
 
@@ -840,6 +999,10 @@ Generate a SKILL.md with this structure:
    - ## Examples - 1-2 concrete examples with Input/Output
    - ## Language rules - Hungarian with ${OWNER_NAME} (the user), English for code/technical
    - ## What to avoid - common pitfalls
+
+IMPORTANT FORMATTING RULES:
+- Write ALL Hungarian text with proper accents (á, é, í, ó, ö, ő, ú, ü, ű). NEVER write Hungarian without accents.
+- Never use em dash (—), only simple hyphen (-).
 
 Keep the body under 200 lines. Be specific and actionable. The owner's name is ${OWNER_NAME}; use only this name when referring to the user.
 Output ONLY the markdown content, no code fences.`

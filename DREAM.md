@@ -1,22 +1,20 @@
-# 💭 Dream Engine — 2026-07-10 02:07
+# 💭 Dream Engine — 2026-07-24 02:07
 
 ## 💡 Skill-javaslatok
-Nincs új javaslat. A tegnapi kreatív ötlet-kör 2. fordulója (pro/contra mélyítés Chichával és Yzmával) már skill-lé alakult menet közben — a `creative-ideation-fanout` kapott egy "Mélyítő kör" szekciót erre a mintára. Nincs ma este második, lefedetlen minta.
+Nincs új javaslat. Az elmúlt 24h egyetlen új, ismétlődő mintája (Google Drive mappára szűkített tartalom-keresés, #215/#216 lezárása kapcsán) már skillbe került tegnap este (`gdrive-folder-scoped-search`). A többi tegnapi munka (ADG #213 CV/LinkedIn iterációk, kanban-auditok) a már meglévő és menet közben patchelt skillek (`job-application-tailoring`, `kanban-audit`) alá esett, nem indokolt új.
 
 ## 🧹 Memória-egészség
-252 / 252 memória vektorizálva (1 elmaradt embedding — a tegnapi `marveen`-napló bejegyzés — pótolva a `/api/memories/backfill` endponttal). 3 elavult hot-tier bejegyzés (>7 napos, nem hozzáférve: id 111/112/114, mind a július eleji WhisperX PoC futásból maradt "AKTIV"/"WAITING" jegyzet, a projekt azóta lezárult) cold-tier-be mozgatva. A már ismert 4 duplikátum-pár (id 36-43, "Szeretem a kavét" / "Mai megbeszeles eredmenye") változatlanul cold-ban ül — nem nyúltam hozzá, törlés csak explicit jóváhagyással.
+550 / 550 vektorizált (1 db backfill-lel pótolva). 7 db antikvált hot-tier memória (rutinszerű "skip-skill" bejegyzések 2026-07-16/17-ről, 7+ napja nem hivatkozva) cold-tierbe mozgatva. 0 pontos duplikátum a nem-cold rétegekben.
 
-## 🎯 Top-3 holnapi javaslat
-1. **Scouts: #5835647f raktár kulcs átvétele** — `high` prioritás, gyakorlati előfeltétele a lenti leltárnak, érdemes egy menetben elintézni vele.
-2. **Scouts: #2afb1b92 leltár + aktív kölcsönzés-felmérés a denben** — a 2026-07-12 kemény határidős QM-teendő, a #153 inventory-rendszer javaslat ettől függ.
-3. **Hame: #d33a47f4 retrofit F opció (LG V30 mint audio-forrás + vezérlő)** — Kronk aktívan dolgozik rajta (dispatch 07-09 este), a kulcskérdés hogy a V30 szoftveresen tudja-e váltani az input-módot, ami kiváltaná a fizikai kapcsoló-hardvert; érdemes rákérdezni hol tart.
-
-CrochetTool és Offsider továbbra is leállítva Jocoo 07-08-i kérésére — nem prioritás, amíg nem jelzi az újraindítást. A Marveen-as-a-Service / Two-Handed Maker kreatív kör 2. fordulója lezárult (Chicha+Yzma teljes válasza kiküldve Jocoonak), de ez döntésre vár nála, nem holnapi akció-tétel.
+## 🎯 Top-3 mai javaslat
+1. Scouts #144: `docs/scouts/ai-vision-inventory-solution-design.md` továbbra is uncommitted a repóban (immár 12+ napja kész) -- gyors nyerés, csak commit + Jocoo elé vitel kell hogy a proposal-kártya mozduljon.
+2. #87 / #206: mindkét in_progress kártya deliverable-je (Chicha YT-elemzés, Mata/Tipo crochet shortok) kész, de a "mehet tovább vagy zárjuk" döntés Jocoo-nál immár napok óta nyitva -- érdemes ma véglegesíteni, mielőtt tovább stagnál.
+3. Scouts #142/#143 (raktárkulcs átvétele + den-inventory lista): mindkettő high priority, 07-17 óta mozdulatlan -- a legrégebb óta stagnáló high-priority tételek a táblán, fizikai jelenlétet igényelnek Jocoo-tól.
 
 ## 🌐 External opportunity
-Skip — heti limit nem telt le (6 nap az utolsó futás óta, 7 nap a küszöb).
+Skip -- heti limit még nem telt le (5 napja futott, ~2 nap van hátra a 7 napos küszöbig).
 
 ## 🛠 Skill-flotta health
-Nincs megbízható invocation-log, csak fájl-mtime — ez önmagában nem elég az "antikvált" megállapításhoz. Egy új skill-patch történt ma (`creative-ideation-fanout`), tehát az aktívan használt skillek köre bővült, nem szűkült. Nem javaslom törlésre egyiket sem valós használati adat nélkül.
+Nincs változás a korábbi jelentéshez képest: ugyanaz a 7 nem-pinned skill mutat 30+ napos érintetlen mtime-ot (ai-fleet-project-execution, github-pr-rebase-merge, handoff, marveen-dashboard-deploy, retrospective, skill-management, stop-and-reassess-3-iter). Nem javaslok törlést -- a `skill_usage` tábla üres (nincs valódi használat-tracking), csak fájl-időbélyeg proxy áll rendelkezésre, ez önmagában nem elég megbízható a törléshez.
 
-*Cuzcoo, 02:15 — most már alszom én is.*
+*Marveen, 02:19 -- most már alszom én is.*

@@ -831,6 +831,26 @@ export function initDatabase(dbPathOverride?: string): void {
   try { db.exec('ALTER TABLE vault_ssh_servers ADD COLUMN ssh_key_id TEXT REFERENCES vault_ssh_keys(id)') } catch { /* already exists */ }
   db.exec(`CREATE INDEX IF NOT EXISTS idx_vault_ssh_servers_key ON vault_ssh_servers(ssh_key_id)`)
 
+  // --- Approvals (HITL) ---
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS approvals (
+      id TEXT PRIMARY KEY,
+      agent_id TEXT NOT NULL,
+      category TEXT NOT NULL,
+      action_description TEXT NOT NULL,
+      action_payload TEXT,
+      status TEXT NOT NULL DEFAULT 'pending'
+        CHECK(status IN ('pending','approved','rejected','timeout')),
+      timeout_at INTEGER,
+      telegram_message_id INTEGER,
+      requested_at INTEGER NOT NULL DEFAULT (unixepoch()),
+      resolved_at INTEGER,
+      resolved_by TEXT
+    )
+  `)
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_approvals_status ON approvals(status, requested_at)`)
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_approvals_agent ON approvals(agent_id, requested_at)`)
+
   // One-shot migration from the old JSON file (which had a read-modify-write
   // race). Import rows if they exist, then rename the file so we don't keep
   // re-importing. Wrapped in a transaction so a crash mid-import is safe.
@@ -1034,6 +1054,19 @@ export function touchMemory(id: number): void {
   db.prepare(
     'UPDATE memories SET accessed_at = ?, salience = MIN(salience + 0.1, 5.0) WHERE id = ?'
   ).run(now, id)
+}
+
+// Mark a batch of memories as just-recalled (bumps accessed_at only). Used by
+// the agent-memory read endpoint so that accessed_at reflects real usage --
+// without this, agent memories keep accessed_at == created_at forever and any
+// "not accessed in N days" staleness check (e.g. the Dream Engine hygiene pass)
+// treats even freshly-recalled memories as stale. Salience is intentionally
+// left untouched here; this is a lightweight recency stamp, not a ranking bump.
+export function touchMemoriesAccessed(ids: number[]): void {
+  if (ids.length === 0) return
+  const now = Math.floor(Date.now() / 1000)
+  const placeholders = ids.map(() => '?').join(',')
+  db.prepare(`UPDATE memories SET accessed_at = ? WHERE id IN (${placeholders})`).run(now, ...ids)
 }
 
 export function decayMemories(): void {
@@ -1651,6 +1684,30 @@ export function getKanbanSeqByIdPrefix(prefix: string): number | null {
   ).all(prefix) as { seq: number }[]
   if (rows.length !== 1) return null
   return rows[0].seq
+}
+
+// Find an active (non-archived) kanban card by exact title match, or
+// undefined when none exists.
+export function findActiveKanbanCardByTitle(title: string): KanbanCard | undefined {
+  return db.prepare(
+    'SELECT rowid AS seq, * FROM kanban_cards WHERE title = ? AND archived_at IS NULL LIMIT 1'
+  ).get(title) as KanbanCard | undefined
+}
+
+// Move the first active kanban card whose title equals `taskName` to the
+// 'waiting' status, appending it at the end of the waiting column.
+// Returns the card id when a match was found and updated, null otherwise.
+// Used by the scheduled-task fire-timeout watchdog when alerting about a
+// potentially stuck task.
+export function markScheduledTaskKanbanWaiting(taskName: string): string | null {
+  const card = findActiveKanbanCardByTitle(taskName)
+  if (!card) return null
+  const maxResult = db.prepare(
+    "SELECT MAX(sort_order) as m FROM kanban_cards WHERE status = 'waiting' AND archived_at IS NULL"
+  ).get() as { m: number | null }
+  const sortOrder = (maxResult.m ?? 0) + 100
+  moveKanbanCard(card.id, 'waiting', sortOrder, 'scheduler')
+  return card.id
 }
 
 export function addKanbanComment(cardId: string, author: string, content: string): KanbanComment {
@@ -2922,5 +2979,96 @@ export function updateVaultSshServer(id: string, patch: Partial<Pick<VaultSshSer
 
 export function deleteVaultSshServer(id: string): boolean {
   return db.prepare('DELETE FROM vault_ssh_servers WHERE id = ?').run(id).changes > 0
+}
+
+// --- Approvals (HITL) ---
+
+export interface Approval {
+  id: string
+  agent_id: string
+  category: string
+  action_description: string
+  action_payload: string | null
+  status: 'pending' | 'approved' | 'rejected' | 'timeout'
+  timeout_at: number | null
+  telegram_message_id: number | null
+  requested_at: number
+  resolved_at: number | null
+  resolved_by: string | null
+}
+
+export function createApproval(params: {
+  id: string
+  agent_id: string
+  category: string
+  action_description: string
+  action_payload?: string | null
+  timeout_at?: number | null
+}): Approval {
+  const now = Math.floor(Date.now() / 1000)
+  db.prepare(`
+    INSERT INTO approvals (id, agent_id, category, action_description, action_payload, timeout_at, requested_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    params.id,
+    params.agent_id,
+    params.category,
+    params.action_description,
+    params.action_payload ?? null,
+    params.timeout_at ?? null,
+    now,
+  )
+  return {
+    id: params.id,
+    agent_id: params.agent_id,
+    category: params.category,
+    action_description: params.action_description,
+    action_payload: params.action_payload ?? null,
+    status: 'pending',
+    timeout_at: params.timeout_at ?? null,
+    telegram_message_id: null,
+    requested_at: now,
+    resolved_at: null,
+    resolved_by: null,
+  }
+}
+
+export function getApproval(id: string): Approval | undefined {
+  return db.prepare('SELECT * FROM approvals WHERE id = ?').get(id) as Approval | undefined
+}
+
+export function resolveApproval(id: string, status: 'approved' | 'rejected' | 'timeout', resolvedBy: string, telegramMessageId?: number | null): boolean {
+  const now = Math.floor(Date.now() / 1000)
+  return db.prepare(`
+    UPDATE approvals
+    SET status = ?, resolved_at = ?, resolved_by = ?,
+        telegram_message_id = COALESCE(?, telegram_message_id)
+    WHERE id = ? AND status = 'pending'
+  `).run(status, now, resolvedBy, telegramMessageId ?? null, id).changes > 0
+}
+
+export function listApprovals(opts: {
+  agent_id?: string
+  category?: string
+  status?: string
+  limit?: number
+}): Approval[] {
+  const conditions: string[] = []
+  const params: unknown[] = []
+  if (opts.agent_id) { conditions.push('agent_id = ?'); params.push(opts.agent_id) }
+  if (opts.category) { conditions.push('category = ?'); params.push(opts.category) }
+  if (opts.status) { conditions.push('status = ?'); params.push(opts.status) }
+  const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : ''
+  const limit = Math.min(opts.limit ?? 100, 500)
+  params.push(limit)
+  return db.prepare(`SELECT * FROM approvals ${where} ORDER BY requested_at DESC LIMIT ?`).all(...params) as Approval[]
+}
+
+export function expireTimedOutApprovals(): number {
+  const now = Math.floor(Date.now() / 1000)
+  return db.prepare(`
+    UPDATE approvals SET status = 'timeout', resolved_at = ?
+    WHERE status = 'pending' AND timeout_at IS NOT NULL AND timeout_at <= ?
+  `).run(now, now).changes
 }
 

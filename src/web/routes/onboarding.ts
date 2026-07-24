@@ -2,11 +2,11 @@ import { readFileSync, writeFileSync, mkdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { homedir, userInfo } from 'node:os'
 import { execFileSync } from 'node:child_process'
-import { PROJECT_ROOT, STORE_DIR } from '../../config.js'
+import { PROJECT_ROOT, STORE_DIR, CHANNEL_PROVIDER } from '../../config.js'
 import { logger } from '../../logger.js'
 import { resolveFromPath } from '../../platform.js'
 import { atomicWriteFileSync } from '../atomic-write.js'
-import { channelStateDir } from '../../channel-provider.js'
+import { channelStateDir, readChannelToken } from '../../channel-provider.js'
 import { sessionExistsOnHost } from '../agent-process.js'
 import { MAIN_CHANNELS_SESSION } from '../main-agent.js'
 import { hardRestartMarveenChannels } from '../channel-monitor.js'
@@ -59,6 +59,18 @@ function keychainHasClaudeCredentials(): boolean {
   } catch { return false }
 }
 
+// The fleet setup-token leg (#654): the wizard's own auth step stores the
+// token into FLEET_TOKEN_FILE (see the /api/onboarding/claude-auth handler
+// below), so an install authenticated ONLY via the fleet token has no env
+// var, no ~/.claude/.credentials.json and no Keychain entry -- without this
+// check the wizard re-nagged on every reload right after completing itself.
+// Presence-only, non-empty, same spirit as the other legs.
+function fleetTokenPresent(): boolean {
+  try {
+    return readFileSync(FLEET_TOKEN_FILE, 'utf-8').trim().length > 0
+  } catch { return false }
+}
+
 function claudeAuthPresent(): boolean {
   if (readEnvValue('CLAUDE_CODE_OAUTH_TOKEN')) return true
   if (readEnvValue('ANTHROPIC_API_KEY')) return true
@@ -78,18 +90,21 @@ function claudeAuthPresent(): boolean {
     if (d?.claudeAiOauth?.accessToken) return true
     if (d?.apiKey) return true
   } catch { /* no / unreadable credentials.json */ }
+  if (fleetTokenPresent()) return true
   return keychainHasClaudeCredentials()
 }
 
-function telegramConfigured(): boolean {
-  try {
-    return /^TELEGRAM_BOT_TOKEN=\S/m.test(readFileSync(join(channelStateDir('telegram'), '.env'), 'utf-8'))
-  } catch { return false }
+// Active-channel checks, provider-aware (NOT hardcoded to Telegram). A
+// Discord-switched (or Slack/etc.) install has no telegram/ state dir, so a
+// telegram-only probe would report "not configured" forever and pop the wizard
+// over a working dashboard. readChannelToken knows each provider's env key.
+function channelConfigured(): boolean {
+  return readChannelToken(CHANNEL_PROVIDER, join(channelStateDir(CHANNEL_PROVIDER), '.env')) != null
 }
 
 function paired(): boolean {
   try {
-    const a = JSON.parse(readFileSync(join(channelStateDir('telegram'), 'access.json'), 'utf-8')) as {
+    const a = JSON.parse(readFileSync(join(channelStateDir(CHANNEL_PROVIDER), 'access.json'), 'utf-8')) as {
       allowFrom?: unknown[]; groups?: Record<string, unknown>
     }
     const allow = Array.isArray(a.allowFrom) ? a.allowFrom.length : 0
@@ -135,7 +150,7 @@ export async function tryHandleOnboarding(ctx: RouteContext): Promise<boolean> {
   if (path === '/api/onboarding/status' && method === 'GET') {
     const claude = claudeAuthPresent()
     const running = agentsRunning()
-    const tg = telegramConfigured()
+    const ch = channelConfigured()
     const pr = paired()
     json(res, {
       identityConfirmed: identityConfirmed(),
@@ -143,11 +158,11 @@ export async function tryHandleOnboarding(ctx: RouteContext): Promise<boolean> {
       currentOwnerName: readEnvValue('OWNER_NAME') || '',
       claudeAuthPresent: claude,
       agentsRunning: running,
-      telegramConfigured: tg,
+      channelConfigured: ch,
       paired: pr,
       // The identity step never re-opens the wizard on an already-configured
       // install: it only participates while first-run setup is incomplete.
-      needsOnboarding: !claude || !running || !tg || !pr,
+      needsOnboarding: !claude || !running || !ch || !pr,
     })
     return true
   }

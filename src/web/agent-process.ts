@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, mkdirSync, writeFileSync, readdirSync, lstatSync, symlinkSync, rmSync } from 'node:fs'
+import { existsSync, readFileSync, mkdirSync, writeFileSync, readdirSync, lstatSync, symlinkSync, rmSync, realpathSync } from 'node:fs'
 import { join } from 'node:path'
 import { homedir } from 'node:os'
 import { execSync, execFileSync } from 'node:child_process'
@@ -15,6 +15,9 @@ import {
   stripGhostSuggestion,
   paneShowsContextSaturation,
   idleConsideringDimGhost,
+  detectsFirstRunGate,
+  detectsModelConsentDialog,
+  type FirstRunGateKind,
 } from '../pane-state.js'
 import { agentDir, listAgentNames, readAgentModel, readAgentClaudeConfigDir, readAgentClaudePlan, readAgentChannelProvider, readAgentAuthMode, readAgentDisplayName, readAgentRemoteConfig, readAgentRemoteHost, readAgentMemoryIsolation } from './agent-config.js'
 import { resolveAgentConfigDir } from './claude-plans.js'
@@ -35,13 +38,14 @@ import {
 } from './ssh-tmux.js'
 import { parseTelegramToken } from './telegram.js'
 import { getProvider, getProviderType, channelStateDir, readChannelToken, type ChannelProviderType } from '../channel-provider.js'
-import { CHANNEL_PROVIDER, MAIN_AGENT_ID, STORE_DIR, PROJECT_ROOT } from '../config.js'
+import { CHANNEL_PROVIDER, MAIN_AGENT_ID, STORE_DIR, PROJECT_ROOT, SUBAGENT_INBOX_TEE } from '../config.js'
 import { getEffectiveSettingValue } from '../settings-store.js'
 import { loadProfileTemplate } from './profiles.js'
 import { resolveAgentSecurityProfile } from './agent-team.js'
-import { writeAgentSettingsFromProfile, ensureFleetRosterSection } from './agent-scaffold.js'
+import { writeAgentSettingsFromProfile, ensureFleetRosterSection, ensureAutonomySection } from './agent-scaffold.js'
 import { schedulePluginUnlockAfterRespawn } from './channel-plugin-unlock.js'
 import { getSecret } from './vault.js'
+import { resolveOpenRouterModel } from './openrouter-models.js'
 import { reapChannelOrphans, reapDetachedChannelClaudes } from './channel-poller-reap.js'
 import { MAIN_CHANNELS_SESSION } from './main-agent.js'
 import { notifyChannel } from '../notify.js'
@@ -115,6 +119,21 @@ export function ownChannelProviderForScope(
   resolvedProvider: string | null,
 ): string | null {
   return hasOwnToken && resolvedProvider ? resolvedProvider : null
+}
+
+// Wrap the telegram plugin's bun stdio server in a tee that persists each
+// inbound channel notification to <stateDir>/inbox-pending.jsonl, which the
+// channel-inbox-drain UserPromptSubmit hook then pulls into the next turn.
+// Sub-agents load the plugin as a plain MCP server, so Claude Code drops its
+// channel notifications; this tee is what makes SUBAGENT_TELEGRAM_WAKE_ENABLED
+// have an inbox to wake on.
+export function buildTelegramMcpServerConfig(bunBin: string, pluginDir: string, stateDir: string) {
+  const wrapper = join(PROJECT_ROOT, 'scripts', 'channel-inbound-tee.mjs')
+  return {
+    command: 'node',
+    args: [wrapper, bunBin, 'run', '--cwd', pluginDir, '--shell=bun', '--silent', 'start'],
+    env: { TELEGRAM_STATE_DIR: stateDir },
+  }
 }
 
 // The fleet's shared long-lived OAuth token (from `claude setup-token`), stored
@@ -528,6 +547,110 @@ export function ensureSharedClaudeOnboarded(dotClaudePath: string = join(homedir
   }
 }
 
+// Pre-accept the PER-PROJECT first-run consent for an agent's working dir in
+// the config root the session will boot from. Claude Code keys the "Do you
+// trust the files in this folder?" dialog on projects[<cwd>].hasTrustDialogAccepted
+// in <config root>/.claude.json -- a GLOBAL hasCompletedOnboarding does not
+// cover it. The main session gets this via the channels.sh startup guard and
+// the generation workers stamp it themselves (agent-worker.ts), but a normal
+// sub-agent launch never did: on the ORIGIN fleet every agents/<name> dir was
+// trusted interactively long ago, so the gap only bites on a FRESH install,
+// where every newly created agent parks on the trust dialog forever and its
+// scheduled tasks pile up as pending retries (Oligo2000 VPS, 2026-07-22).
+//
+// Stamps both the given dir and its realpath (macOS /var vs /private/var,
+// symlinked homes) since Claude Code keys trust by the resolved path. Write is
+// atomic and only performed on actual change, so a live Claude Code process
+// racing us never sees a torn file and an already-stamped launch is a no-op.
+export function stampProjectTrustForDir(dotClaudePath: string, projectDir: string): boolean {
+  try {
+    let data: Record<string, unknown> = {}
+    if (existsSync(dotClaudePath)) {
+      data = JSON.parse(readFileSync(dotClaudePath, 'utf-8')) as Record<string, unknown>
+    }
+    const dirs = new Set<string>([projectDir])
+    try { dirs.add(realpathSync(projectDir)) } catch { /* dir may not resolve yet */ }
+    const projects: Record<string, unknown> =
+      (data.projects && typeof data.projects === 'object' && !Array.isArray(data.projects))
+        ? data.projects as Record<string, unknown>
+        : {}
+    let changed = false
+    if (data.hasCompletedOnboarding !== true) {
+      data.hasCompletedOnboarding = true
+      changed = true
+    }
+    for (const dir of dirs) {
+      const base = (projects[dir] && typeof projects[dir] === 'object')
+        ? projects[dir] as Record<string, unknown>
+        : {}
+      if (base.hasTrustDialogAccepted === true && base.hasCompletedProjectOnboarding === true) continue
+      projects[dir] = {
+        ...base,
+        hasTrustDialogAccepted: true,
+        hasCompletedProjectOnboarding: true,
+        projectOnboardingSeenCount: Math.max(1, Number(base.projectOnboardingSeenCount) || 0),
+      }
+      changed = true
+    }
+    if (!changed) return false
+    data.projects = projects
+    atomicWriteFileSync(dotClaudePath, JSON.stringify(data, null, 2) + '\n', { mode: 0o600 })
+    logger.info({ dotClaudePath, projectDir }, 'project-trust: stamped folder-trust consent for agent dir')
+    return true
+  } catch (err) {
+    // Unparseable/unwritable file: leave it to Claude Code (same policy as
+    // ensureSharedClaudeOnboarded). The scheduler's first-run gate + the
+    // channel-monitor's dialog answering remain the runtime backstop.
+    logger.warn({ err, dotClaudePath, projectDir }, 'project-trust: could not stamp trust flags (agent may park on the folder-trust dialog)')
+    return false
+  }
+}
+
+// Pre-stamp the Fable overage-consent acknowledgment in a config root's
+// .claude.json so the "Fable 5 now uses usage credits" dialog never renders.
+//
+// Root cause chain (2026-07-23, card b71fc541): a config root without
+// fableOverageConsentV2[<orgUuid>] parks the first Fable 5 turn on a TUI
+// dialog whose DEFAULT option is "Switch to Sonnet 5 and continue". The
+// fleet's own blind Enters (identity /name, sendPromptToSession retry-Enter)
+// accept that default, silently switching the session to Sonnet while
+// agent-config still says claude-fable-5 -- the long-unexplained
+// model/activeModel drift. Fleet policy (owner decision 2026-07-23): the
+// fleet stays on Fable 5, so the consent is pre-acknowledged the same way
+// onboarding/trust flags already are (see stampProjectTrustForDir above).
+//
+// Claude Code keys the consent on oauthAccount.organizationUuid (or
+// "acct:<accountUuid>" for org-less accounts) in the SAME .claude.json. A
+// file without an oauthAccount (brand-new config root that has never
+// authenticated) is left alone -- there is nothing to key the consent on;
+// the runtime dialog-answer backstop (dismissModelConsentDialogIfPresent)
+// covers that first session and this stamp catches up on the next launch.
+// Write is atomic and change-only, mirroring ensureSharedClaudeOnboarded.
+export function stampFableOverageConsent(dotClaudePath: string): boolean {
+  try {
+    if (!existsSync(dotClaudePath)) return false
+    const data = JSON.parse(readFileSync(dotClaudePath, 'utf-8')) as Record<string, unknown>
+    const oauth = (data.oauthAccount && typeof data.oauthAccount === 'object' && !Array.isArray(data.oauthAccount))
+      ? data.oauthAccount as Record<string, unknown>
+      : null
+    const orgUuid = typeof oauth?.organizationUuid === 'string' && oauth.organizationUuid ? oauth.organizationUuid : null
+    const acctUuid = typeof oauth?.accountUuid === 'string' && oauth.accountUuid ? oauth.accountUuid : null
+    const key = orgUuid ?? (acctUuid ? `acct:${acctUuid}` : null)
+    if (!key) return false
+    const consent = (data.fableOverageConsentV2 && typeof data.fableOverageConsentV2 === 'object' && !Array.isArray(data.fableOverageConsentV2))
+      ? data.fableOverageConsentV2 as Record<string, unknown>
+      : {}
+    if (consent[key] === true) return false
+    data.fableOverageConsentV2 = { ...consent, [key]: true }
+    atomicWriteFileSync(dotClaudePath, JSON.stringify(data, null, 2) + '\n', { mode: 0o600 })
+    logger.info({ dotClaudePath }, 'fable-consent: pre-stamped fableOverageConsentV2 (prevents the usage-credit model-switch dialog)')
+    return true
+  } catch (err) {
+    logger.warn({ err, dotClaudePath }, 'fable-consent: could not stamp consent (runtime dialog-answer backstop remains)')
+    return false
+  }
+}
+
 function resolveAgentProvider(name: string): ChannelProviderType {
   const perAgent = readAgentChannelProvider(name)
   if (perAgent === 'slack' || perAgent === 'telegram' || perAgent === 'discord' || perAgent === 'googlechat' || perAgent === 'teams') return perAgent
@@ -785,11 +908,16 @@ export function startAgentProcess(name: string, opts: { fresh?: boolean } = {}):
       logger.warn({ err, name }, 'pre-launch detached-claude reap failed (continuing)')
     }
 
-    const model = readAgentModel(name)
+    // `openrouter-auto:<tier>` resolves to the tier's current recommended model
+    // (weekly-refreshed); a concrete OpenRouter id (contains '/') passes through.
+    const model = resolveOpenRouterModel(readAgentModel(name))
     const authMode = readAgentAuthMode(name)
     const isClaude = model.startsWith('claude-')
     const isDeepseek = model.startsWith('deepseek-')
-    const isOllama = !isClaude && !isDeepseek
+    // OpenRouter model ids are `provider/model` (contain '/'); Ollama tags use
+    // ':' and no '/'. This discriminator keeps OpenRouter ids off the Ollama path.
+    const isOpenRouter = !isClaude && !isDeepseek && model.includes('/')
+    const isOllama = !isClaude && !isDeepseek && !isOpenRouter
     // ANTHROPIC_MODEL is REQUIRED for non-Claude models: the interactive TUI
     // validates the `--model` flag against known Anthropic models and silently
     // falls back to the built-in default (claude-opus-...) for an unrecognized
@@ -800,6 +928,10 @@ export function startAgentProcess(name: string, opts: { fresh?: boolean } = {}):
     const ollamaEnv = isOllama ? `export ANTHROPIC_AUTH_TOKEN=ollama && export ANTHROPIC_BASE_URL=${OLLAMA_URL} && export ANTHROPIC_MODEL='${model}' && ` : ''
     const deepseekKey = isDeepseek ? (getSecret('DEEPSEEK_API_KEY') ?? '') : ''
     const deepseekEnv = isDeepseek ? `export ANTHROPIC_AUTH_TOKEN="${deepseekKey}" && export ANTHROPIC_BASE_URL=https://api.deepseek.com/anthropic && export ANTHROPIC_MODEL='${model}' && ` : ''
+    // OpenRouter: Anthropic-compatible endpoint at https://openrouter.ai/api
+    // (the SDK appends /v1/messages). Key from the vault (openrouter-fleet-key).
+    const openrouterKey = isOpenRouter ? (getSecret('openrouter-fleet-key') ?? '') : ''
+    const openrouterEnv = isOpenRouter ? `export ANTHROPIC_AUTH_TOKEN="${openrouterKey}" && export ANTHROPIC_BASE_URL=https://openrouter.ai/api && export ANTHROPIC_MODEL='${model}' && ` : ''
     // When authMode is 'api', the agent uses its own ANTHROPIC_API_KEY from
     // the vault instead of the host's OAuth. The vault entry ID follows the
     // convention `agent-{name}-api-key`. We inject it as an env var so Claude
@@ -821,6 +953,7 @@ export function startAgentProcess(name: string, opts: { fresh?: boolean } = {}):
     const profile = loadProfileTemplate(resolveAgentSecurityProfile(name))
     writeAgentSettingsFromProfile(name, profile)
     ensureFleetRosterSection(name)
+    ensureAutonomySection(name)
     // A sub-agent must load ONLY its own channel plugin. The user-scope
     // enabledPlugins would otherwise make EVERY sub-agent spawn a telegram
     // (and slack/discord) poller that falls back to the main agent's bot
@@ -840,21 +973,64 @@ export function startAgentProcess(name: string, opts: { fresh?: boolean } = {}):
     // its channel comes up via channels.sh -- but if a future caller ever passed
     // MAIN_AGENT_ID in, scopeChannelPlugins(null) would DISABLE the owner's
     // telegram channel (Szabi's primary line). Refuse outright.
+    //
+    // Telegram agents use a per-agent .mcp.json to spawn their own bun process
+    // instead of the shared --channels flag path. The --channels path goes
+    // through the plugin's .in_use/<pid> lock: if one process already holds the
+    // lock, every other agent that starts with --channels gets "already in use"
+    // and ends up with No MCP servers configured -- no bun, no bot.pid, deaf to
+    // inbound Telegram. The mcp.json path bypasses the lock: Claude Code spawns a
+    // fresh bun stdio server per agent, each with its own TELEGRAM_STATE_DIR. The
+    // stdio tee wrapper restores inbound delivery by persisting notifications to a
+    // local inbox that the UserPromptSubmit drain hook pulls into context.
+    //
+    // OPT-IN / DEFAULT OFF (SUBAGENT_INBOX_TEE). This mcp.json+tee swap is a
+    // delivery-path change: it writes inbound message content to a local inbox
+    // file for the drain hook to pull. With the flag off, telegram sub-agents
+    // keep the upstream `--channels` path unchanged and nothing is written to
+    // disk. Only opt in together with the channel-inbox-drain hook + (optionally)
+    // SUBAGENT_TELEGRAM_WAKE_ENABLED.
+    let useMcpJsonForChannel = false
+    if (SUBAGENT_INBOX_TEE && hasChannel && agentProvider === 'telegram' && name !== MAIN_AGENT_ID) {
+      try {
+        const pluginCacheDir = join(homedir(), '.claude', 'plugins', 'cache', 'claude-plugins-official', 'telegram')
+        const versions = existsSync(pluginCacheDir)
+          ? readdirSync(pluginCacheDir).filter(v => /^\d+\.\d+\.\d+$/.test(v)).sort().reverse()
+          : []
+        const pluginVersion = versions[0] ?? '0.0.6'
+        const pluginDir = join(pluginCacheDir, pluginVersion)
+        const bunBin = join(homedir(), '.bun', 'bin', 'bun')
+        // The agent working-dir .mcp.json (NOT .claude/mcp.json) is what Claude Code
+        // loads as project-scope MCP config. An empty .mcp.json already present would
+        // override .claude/mcp.json, so write to the same file Claude Code reads.
+        const mcpJsonPath = join(agentDir(name), '.mcp.json')
+        const mcpConfig = {
+          mcpServers: {
+            'plugin:telegram:telegram': buildTelegramMcpServerConfig(bunBin, pluginDir, agentChannelDir),
+          },
+        }
+        writeFileSync(mcpJsonPath, JSON.stringify(mcpConfig, null, 2))
+        useMcpJsonForChannel = true
+        logger.info({ name, pluginVersion, pluginDir }, 'Wrote per-agent mcp.json for telegram plugin')
+      } catch (err) {
+        logger.warn({ err, name }, 'Could not write mcp.json for telegram agent; falling back to --channels flag')
+      }
+    }
+
     if (name !== MAIN_AGENT_ID) {
       const settingsPath = join(agentDir(name), '.claude', 'settings.json')
       try {
         const s = JSON.parse(readFileSync(settingsPath, 'utf-8')) as Record<string, unknown>
-        // Gate the enable decision on the SAME signal as the --channels launch
-        // flag: a real own bot token in this agent's channel .env (token, above).
-        // A genuine own-token agent enables its own provider's plugin; a channel-
-        // less agent (no own token, only the legacy/global fallback that still
-        // marks hasChannel) yields null -> all providers disabled, so it never
-        // fights the main agent over the shared getUpdates slot. Keying on the
-        // explicit channelProvider config field instead (always null for sub-agents)
-        // was the regression that disabled the plugin for every legitimately-
-        // channelled sub-agent after a respawn (truly-unreachable plugin, no poller).
+        // When mcp.json is used for the telegram plugin, force enabledPlugins.telegram
+        // to false so Claude Code does not ALSO load the plugin via the marketplace
+        // enabledPlugins path -- that would spawn a second bun process and produce
+        // 409 Conflict / poller races. When --channels is still used (non-telegram
+        // providers or mcp.json write failure), keep the original token-gated logic.
+        const scopeProvider = useMcpJsonForChannel
+          ? null
+          : ownChannelProviderForScope(!!token, agentProvider)
         s.enabledPlugins = scopeChannelPlugins(
-          ownChannelProviderForScope(!!token, agentProvider),
+          scopeProvider,
           s.enabledPlugins as Record<string, boolean> | undefined,
         )
         writeFileSync(settingsPath, JSON.stringify(s, null, 2))
@@ -923,6 +1099,21 @@ export function startAgentProcess(name: string, opts: { fresh?: boolean } = {}):
         maybeAlertSharedConfigCollision(name)
       }
     }
+    // Per-project trust pre-seed in the config root this session will ACTUALLY
+    // use (isolated CLAUDE_CONFIG_DIR when set, shared ~/.claude.json
+    // otherwise). Without it a fresh install's first launch of each agent
+    // parks on the "Do you trust the files in this folder?" dialog -- see
+    // stampProjectTrustForDir.
+    stampProjectTrustForDir(
+      claudeConfigDir ? join(claudeConfigDir, '.claude.json') : join(homedir(), '.claude.json'),
+      dir,
+    )
+    // Same target file: pre-acknowledge the Fable usage-credit consent so the
+    // model-switch dialog (default: Sonnet) never renders -- see
+    // stampFableOverageConsent for the drift root-cause chain.
+    stampFableOverageConsent(
+      claudeConfigDir ? join(claudeConfigDir, '.claude.json') : join(homedir(), '.claude.json'),
+    )
     const claudeConfigEnv = claudeConfigDir ? `export CLAUDE_CONFIG_DIR="${claudeConfigDir}" && ` : ''
     // `--continue` requires an existing session; on a brand-new agent the
     // Claude Code projects directory does not yet exist and `claude` exits
@@ -955,7 +1146,14 @@ export function startAgentProcess(name: string, opts: { fresh?: boolean } = {}):
     const channelSetup = hasChannel
       ? `export ${stateEnvVar}="${agentChannelDir}"${auditLogEnv} && `
       : ''
-    const channelFlag = hasChannel ? `--channels plugin:${provider.pluginId}` : ''
+    // When the per-agent mcp.json+tee path is active (SUBAGENT_INBOX_TEE), the
+    // plugin is already loaded as a plain MCP server, so ALSO passing --channels
+    // would register the plugin a SECOND way -- a duplicate poller racing the tee
+    // process over the same getUpdates slot. Suppress --channels in that case and
+    // rely solely on mcp.json (enabledPlugins is already forced false above for
+    // the same reason). Every other agent (non-telegram, main, or flag off) keeps
+    // the --channels launch path unchanged.
+    const channelFlag = hasChannel && !useMcpJsonForChannel ? `--channels plugin:${provider.pluginId}` : ''
     // Channel-plugin MCP-registration guard (2026-06-23): the telegram/slack/etc.
     // channel plugin registers as a stdio MCP server loaded via --channels. Claude
     // Code connects stdio MCP servers in batches of MCP_SERVER_CONNECTION_BATCH_SIZE
@@ -983,7 +1181,7 @@ export function startAgentProcess(name: string, opts: { fresh?: boolean } = {}):
     const promptSuggestionEnv = 'export CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false && '
     // Single-quote `${model}` so values like `claude-opus-4-8[1m]` (1M-context
     // suffix) are not glob-expanded by the shell that tmux spawns the command in.
-    const cmd = `export PATH="/opt/homebrew/bin:$HOME/.bun/bin:/usr/local/bin:/usr/bin:/bin:$PATH" && ${unsetTokens} && ${promptSuggestionEnv}${mcpEnv}${channelSetup}${apiKeyEnv}${claudeConfigEnv}${oauthTokenEnv}${ollamaEnv}${deepseekEnv}cd "${dir}" && ${claudeBin()} ${continueFlag}${skipFlag}--model '${model}' ${channelFlag}`.trimEnd()
+    const cmd = `export PATH="/opt/homebrew/bin:$HOME/.bun/bin:/usr/local/bin:/usr/bin:/bin:$PATH" && ${unsetTokens} && ${promptSuggestionEnv}${mcpEnv}${channelSetup}${apiKeyEnv}${claudeConfigEnv}${oauthTokenEnv}${ollamaEnv}${deepseekEnv}${openrouterEnv}cd "${dir}" && ${claudeBin()} ${continueFlag}${skipFlag}--model '${model}' ${channelFlag}`.trimEnd()
     runTmux(null, ['new-session', '-d', '-s', session, cmd], { timeout: 10000 })
 
     logger.info({ name, session, channelDir: agentChannelDir }, 'Agent tmux session started')
@@ -1122,6 +1320,85 @@ export async function dismissResumeSummaryModalIfPresent(session: string, host: 
   }
 }
 
+// Runtime backstop for the model overage-consent dialog ("Fable 5 now uses
+// usage credits" -- see detectsModelConsentDialog in pane-state.ts for the
+// full anatomy and the drift root cause). The stampFableOverageConsent
+// pre-seed normally prevents the dialog entirely; this handler covers the
+// windows the seed cannot reach (a config root that had no oauthAccount yet,
+// a future consent-key version bump). Unlike the generic dismissals above it
+// must NOT send a bare Enter: the dialog's default option SWITCHES the model
+// to Sonnet. It actively selects option 1 ("Continue with <configured
+// model>") -- number first, then confirm, mirroring answerFirstRunGates. The
+// keystrokes only ever fire when the specific dialog is visibly on screen
+// (pure detector, quoted-text-proof), so this adds no blind-injection surface.
+export async function dismissModelConsentDialogIfPresent(session: string, host: string | null = null): Promise<void> {
+  try {
+    const pane = captureTmux(host, ['capture-pane', '-t', session, '-p'])
+    if (!detectsModelConsentDialog(pane)) return
+    runTmux(host, ['send-keys', '-t', session, '1'], { timeout: 5000 })
+    await delay(150)
+    runTmux(host, ['send-keys', '-t', session, 'Enter'], { timeout: 5000 })
+    await delay(300)
+    logger.info({ session }, 'Answered model usage-credit consent dialog: kept the configured model (option 1, never the switch default)')
+  } catch (err) {
+    logger.warn({ err, session }, 'Failed to probe/answer model usage-credit consent dialog')
+  }
+}
+
+// Walk a session out of the Claude Code FIRST-RUN dialog chain (folder-trust,
+// bypass-permissions acceptance, theme picker, welcome screen), answering each
+// dialog exactly the way scripts/channels.sh's startup guard does for the main
+// session: trust -> "1" Enter (Yes, proceed), bypass -> "2" Enter (Yes, I
+// accept), theme/welcome -> Enter (accept default / continue). The login
+// picker is NEVER answered -- nobody can authenticate on the operator's
+// behalf -- so it is returned for the caller to alert on.
+//
+// Escape is deliberately NOT used anywhere here: on the trust/bypass dialogs
+// Escape selects "No, exit" and quits the TUI, which is exactly the
+// respawn-loop failure the channel-monitor's generic menu recovery would cause
+// on these panes (hence the detectsFirstRunGate carve-out at its call site).
+//
+// Bounded walk: the chain is at most a handful of dialogs; each answered
+// dialog gets a settle delay before the re-capture. Returns 'cleared' when at
+// least one dialog was answered and none remains, 'login' when the login
+// picker is (or becomes) the blocker, 'unchanged' when no gate was present.
+const FIRST_RUN_ANSWER_MAX_STEPS = 6
+const FIRST_RUN_ANSWER_SETTLE_MS = 1500
+
+export async function answerFirstRunGates(
+  session: string,
+  host: string | null = null,
+): Promise<'cleared' | 'login' | 'unchanged'> {
+  let acted = false
+  for (let i = 0; i < FIRST_RUN_ANSWER_MAX_STEPS; i++) {
+    const pane = capturePane(session, host)
+    const gate: FirstRunGateKind | null = pane != null ? detectsFirstRunGate(pane) : null
+    if (gate == null) return acted ? 'cleared' : 'unchanged'
+    if (gate === 'login') return 'login'
+    try {
+      if (gate === 'trust') {
+        runTmux(host, ['send-keys', '-t', session, '1'], { timeout: 5000 })
+        await delay(150)
+        runTmux(host, ['send-keys', '-t', session, 'Enter'], { timeout: 5000 })
+      } else if (gate === 'bypass-permissions') {
+        runTmux(host, ['send-keys', '-t', session, '2'], { timeout: 5000 })
+        await delay(150)
+        runTmux(host, ['send-keys', '-t', session, 'Enter'], { timeout: 5000 })
+      } else {
+        // theme / welcome: Enter accepts the highlighted default and moves on.
+        runTmux(host, ['send-keys', '-t', session, 'Enter'], { timeout: 5000 })
+      }
+    } catch (err) {
+      logger.warn({ err, session, gate }, 'first-run gate: answer keystroke failed')
+      return acted ? 'cleared' : 'unchanged'
+    }
+    acted = true
+    logger.info({ session, gate, step: i }, 'first-run gate: answered dialog')
+    await delay(FIRST_RUN_ANSWER_SETTLE_MS)
+  }
+  return acted ? 'cleared' : 'unchanged'
+}
+
 // Post-(re)start identity setup. Every freshly spawned Claude Code session is
 // given `/name` so it is identifiable. (`/remote-control` was dropped: the
 // operator no longer uses Remote Control, and the agent's inference-only OAuth
@@ -1149,6 +1426,7 @@ export async function scheduleIdentitySetup(session: string, displayName: string
       try {
         await dismissSurveyModalIfPresent(session, host)
         await dismissResumeSummaryModalIfPresent(session, host)
+        await dismissModelConsentDialogIfPresent(session, host)
       } catch (err) {
         logger.warn({ err, session }, 'Post-restart modal dismiss failed')
       }
@@ -1311,6 +1589,7 @@ export async function sendPromptToSession(
 ): Promise<'sent' | 'aborted-busy'> {
   await dismissSurveyModalIfPresent(session, host)
   await dismissResumeSummaryModalIfPresent(session, host)
+  await dismissModelConsentDialogIfPresent(session, host)
 
   // Pre-flight wait-until-idle (root-cause gate). Placed here -- inside
   // sendPromptToSession, AFTER the modal dismissals (a modal keeps the pane
@@ -1517,9 +1796,13 @@ export function captureParkedInputView(session: string, host: string | null = nu
 //
 // A saturated pane ("100% context used") is refused up front: it can present
 // as perfectly idle, so without this a new prompt would be dispatched into a
-// session that cannot act on it. We only log/audit the refusal here; how (or
-// whether) to recover the session is left to the caller / operator tooling, so
-// this predicate stays a pure, dependency-free readiness check.
+// session that cannot act on it. We only log/audit the refusal here; recovery
+// is the context-guard runner's saturation net (fresh restart -- see
+// src/web/context-guard-runner.ts), so this predicate stays a pure,
+// dependency-free readiness check. NOTE the refusal is part of a deadlock by
+// design: Claude Code's auto-compact only runs when a new turn starts, and
+// this refusal is exactly what prevents a new turn -- so a saturated session
+// never self-heals and MUST be restarted from outside.
 export async function isSessionReadyForPrompt(session: string, host: string | null = null): Promise<boolean> {
   // Dim-ghost tolerant idle read: CC >=2.1.202 paints a dim placeholder into
   // the empty input box, which a plain capture reads as parked text. Only when
