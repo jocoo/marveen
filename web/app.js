@@ -1,3 +1,13 @@
+// === Avatar cache-busting epoch ===
+// Avatar URLs used to carry ?t=Date.now() on every render, which defeated the
+// browser cache and re-downloaded ~1MB per avatar on each rerender (brutal on
+// slow remote links). Instead the URLs are stable (server sends max-age +
+// ETag) until an avatar is actually changed in THIS session, which bumps the
+// epoch and re-busts every avatar URL rendered afterwards.
+let _avatarEpoch = 0
+function bumpAvatarEpoch() { _avatarEpoch = Date.now() }
+function avatarBust() { return _avatarEpoch ? `?t=${_avatarEpoch}` : '' }
+
 // === i18n runtime ===
 // Priority: localStorage['marveen.lang'] > DASHBOARD_LANG (server default, read
 // from /api/settings on init) > 'hu' (hardcoded fallback).
@@ -150,24 +160,93 @@ function mainAgentAvatarUrl(ts) {
       if (!urlToken) sessionToken = ''
       if (!window.__marveenAuthPrompted) {
         window.__marveenAuthPrompted = true
-        // An installed (home-screen) PWA has its own localStorage, separate from
-        // Safari's, and the manifest start_url has no ?token=, so the very first
-        // standalone launch is token-less and 401s. There is no address bar to
-        // paste a ?token= URL into either. Offer an in-app paste field that
-        // writes the token to the app's own storage, then reload.
-        const isStandalone = window.navigator.standalone === true ||
-          (window.matchMedia && window.matchMedia('(display-mode: standalone)').matches)
-        if (isStandalone) {
-          showStandaloneTokenPrompt(TOKEN_KEY)
-        } else {
-          alert(
-            'Dashboard authentication failed. Check the server log for the access URL ' +
-            '(look for "Dashboard access URL" with ?token=...), then reopen it in your browser.'
-          )
-        }
+        handleAuthFailure()
       }
     }
     return res
+  }
+
+  // On a 401, ask the public status probe whether a username+password login is
+  // available on this instance. If so, show the login overlay; otherwise fall
+  // back to the existing token flows (PWA paste field or the console-URL alert).
+  async function handleAuthFailure() {
+    let status = null
+    try {
+      const r = await originalFetch('/api/auth/status')
+      if (r.ok) status = await r.json()
+    } catch { /* offline or probe failed -- fall through to token flows */ }
+    if (status && status.login_available) {
+      showLoginOverlay()
+      return
+    }
+    // An installed (home-screen) PWA has its own localStorage, separate from
+    // Safari's, and the manifest start_url has no ?token=, so the very first
+    // standalone launch is token-less and 401s. There is no address bar to paste
+    // a ?token= URL into either. Offer an in-app paste field that writes the
+    // token to the app's own storage, then reload.
+    const isStandalone = window.navigator.standalone === true ||
+      (window.matchMedia && window.matchMedia('(display-mode: standalone)').matches)
+    if (isStandalone) {
+      showStandaloneTokenPrompt(TOKEN_KEY)
+    } else {
+      alert(
+        'Dashboard authentication failed. Check the server log for the access URL ' +
+        '(look for "Dashboard access URL" with ?token=...), then reopen it in your browser.'
+      )
+    }
+  }
+
+  // Full-screen username+password login overlay. Posts to /api/auth/login; on
+  // success the browser has the mv_session cookie and we reload authenticated.
+  function showLoginOverlay() {
+    if (document.getElementById('mv-login-overlay')) return
+    const tr = (k, fallback) => (typeof window.t === 'function' ? window.t(k) : fallback) || fallback
+    const overlay = document.createElement('div')
+    overlay.id = 'mv-login-overlay'
+    overlay.className = 'mv-auth-overlay'
+    overlay.innerHTML =
+      '<form class="mv-auth-card" id="mv-login-form">' +
+        '<h2>' + tr('auth.login.title', 'Sign in') + '</h2>' +
+        '<p class="mv-auth-desc">' + tr('auth.login.desc', 'Enter your dashboard username and password.') + '</p>' +
+        '<input id="mv-login-user" type="text" autocomplete="username" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="' + tr('auth.login.username', 'Username') + '">' +
+        '<input id="mv-login-pass" type="password" autocomplete="current-password" placeholder="' + tr('auth.login.password', 'Password') + '">' +
+        '<button type="submit" id="mv-login-submit">' + tr('auth.login.submit', 'Sign in') + '</button>' +
+        '<div class="mv-auth-err" id="mv-login-err"></div>' +
+      '</form>'
+    document.body.appendChild(overlay)
+    const form = overlay.querySelector('#mv-login-form')
+    const userEl = overlay.querySelector('#mv-login-user')
+    const passEl = overlay.querySelector('#mv-login-pass')
+    const errEl = overlay.querySelector('#mv-login-err')
+    const submitEl = overlay.querySelector('#mv-login-submit')
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault()
+      errEl.textContent = ''
+      const username = (userEl.value || '').trim()
+      const password = passEl.value || ''
+      if (!username || !password) { errEl.textContent = tr('auth.login.err_empty', 'Enter a username and password.'); return }
+      submitEl.disabled = true
+      try {
+        const r = await originalFetch('/api/auth/login', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ username, password }),
+        })
+        if (r.ok) { window.location.reload(); return }
+        if (r.status === 429) {
+          let retry = 0
+          try { retry = (await r.json()).retry_after_s || 0 } catch { /* ignore */ }
+          errEl.textContent = tr('auth.login.err_throttled', 'Too many attempts. Try again later.') + (retry ? ' (' + retry + 's)' : '')
+        } else {
+          errEl.textContent = tr('auth.login.err_invalid', 'Invalid credentials.')
+        }
+      } catch {
+        errEl.textContent = tr('auth.login.err_network', 'Network error.')
+      } finally {
+        submitEl.disabled = false
+      }
+    })
+    setTimeout(() => userEl.focus(), 50)
   }
 
   // Full-screen, one-time token paste for installed PWAs (see the 401 handler).
@@ -332,6 +411,8 @@ function confirmSettingsLeave() {
 }
 
 function switchPage(pageId) {
+  // 'team' is merged into 'agents'; any internal call still passing 'team' redirects.
+  if (pageId === 'team') { _agentsActiveView = 'tree'; pageId = 'agents' }
   // Guard unsaved settings before leaving the settings page
   if (!document.getElementById('settingsPage').hidden && pageId !== 'settings' && !confirmSettingsLeave()) return
   pages.forEach((p) => (p.hidden = p.id !== pageId + 'Page'))
@@ -341,17 +422,21 @@ function switchPage(pageId) {
   // Activity page runs a live poll; stop it whenever we navigate away.
   if (pageId !== 'activity') stopActivityPoll()
   if (pageId === 'activity') startActivityPoll()
+  // Agents page tints each Terminal button green while that agent is working;
+  // same 3s poll + source as Activity. Stop it when we leave the page.
+  if (pageId !== 'agents') stopAgentsBusyPoll()
   // Kanban auto-refresh: start on enter, stop on leave.
   if (pageId !== 'kanban') stopKanbanRefresh()
   if (pageId === 'overview') loadOverview()
   if (pageId === 'kanban') { if (typeof _initGanttViewSwitcher === 'function') _initGanttViewSwitcher(); loadKanban(); startKanbanRefresh() }
   if (pageId === 'tasks') loadSchedules()
-  if (pageId === 'agents') loadAgents()
+  if (pageId === 'agents') { loadAgents().then(() => _setAgentsView(_agentsActiveView || 'grid')); startAgentsBusyPoll() }
   if (pageId === 'memories') { loadMemAgents(); loadMemStats(); loadMemories() }
   if (pageId === 'skills') loadGlobalSkills()
   if (pageId === 'connectors') loadConnectors()
   if (pageId === 'migrate') loadMigrateAgents()
   if (pageId === 'docs') loadDocs()
+  if (pageId === 'research') loadResearch()
   if (pageId === 'status') loadStatus()
   if (pageId === 'recall') loadRecallPage()
   if (pageId === 'bgTasks') loadBgTasksPage()
@@ -359,7 +444,7 @@ function switchPage(pageId) {
   if (pageId === 'approvals') loadApprovalsPage()
   if (pageId === 'settings') { loadSettings(); renderLanguagesAdmin() }
   if (pageId === 'updates') loadUpdates()
-  if (pageId === 'team') { loadTeamGraph() }
+  // 'team' page is merged into 'agents' -- redirect for any lingering deep-links
   if (pageId === 'messages') loadMessagesPage()
   if (pageId === 'tokenUsage') loadTokenUsage()
   if (pageId === 'costs') loadCosts()
@@ -408,6 +493,7 @@ const NAV_I18N = {
   recall: 'nav.recall', naplo: 'nav.recall', bgTasks: 'nav.bgTasks',
   skills: 'nav.skills', connectors: 'nav.connectors', migrate: 'nav.migrate',
   approvals: 'nav.approvals',
+  docs: 'nav.docs', research: 'nav.research', status: 'nav.status',
   settings: 'nav.settings', vault: 'nav.vault', tokenUsage: 'nav.tokenUsage',
   ideas: 'nav.ideas', federation: 'nav.federation', updates: 'nav.updates', costs: 'nav.costs',
 }
@@ -442,6 +528,7 @@ const PAGE_HEADER_I18N = {
   connectorsPage: { title: 'connectors.page_title',  sub: 'connectors.page_subtitle' },
   migratePage:    { title: 'migrate.page_title',     sub: 'migrate.page_subtitle' },
   docsPage:       { title: 'docs.page_title',        sub: 'docs.page_subtitle' },
+  researchPage:   { title: 'research.page_title',    sub: 'research.page_subtitle' },
   statusPage:     { title: 'status.page_title',      sub: 'status.page_subtitle' },
   teamPage:       { title: 'team.page_title',        sub: 'team.page_subtitle' },
   messagesPage:   { title: 'messages.page_title',    sub: 'messages.page_subtitle' },
@@ -1418,6 +1505,11 @@ function createCardEl(card, embeddedChildren = []) {
   })
   el.addEventListener('dragend', () => el.classList.remove('dragging'))
 
+  // Touch equivalent of the above -- see wireKanbanCardTouchDnD. Wired before
+  // the click listener so its capture-phase guard can swallow the tap that
+  // ends a drag.
+  wireKanbanCardTouchDnD(el, card)
+
   // Click -> detail
   el.addEventListener('click', () => showCardDetail(card))
 
@@ -1474,6 +1566,198 @@ function wireKanbanColumnDnD(col) {
   })
 }
 columns.forEach(wireKanbanColumnDnD)
+
+// === Touch drag & drop (mobile) ===
+// HTML5 drag & drop above never fires on a touch screen -- no dragstart, no
+// drop -- so on a phone the board could only be read, never rearranged. This
+// is a parallel touch path over the same /move call.
+//
+// Why touch events and not Pointer Events + touch-action: a card fills most of
+// the column, so making it permanently untouchable for scrolling (touch-action:
+// none) would break scrolling the board. Instead the gesture stays ambiguous
+// until it resolves: a long press (250ms) means "drag", any earlier movement
+// means "scroll" and hands the gesture straight back to the browser. Only once
+// dragging is committed does touchmove call preventDefault() to hold the page
+// still -- which is why that listener MUST be non-passive.
+const TOUCH_DRAG_DELAY_MS = 250
+const TOUCH_DRAG_SLOP_PX = 10
+let touchDrag = null
+
+function kanbanColBodyAt(x, y) {
+  const el = document.elementFromPoint(x, y)
+  return el ? el.closest('.kanban-col-body') : null
+}
+
+// On a phone the columns stack vertically, so the next column starts ~2000px
+// below the fold -- dragging a card "one column over" would mean dragging it
+// at an invisible target while the page auto-scrolls for several seconds.
+// Instead, committing to a drag raises a fixed bar of status targets over the
+// bottom of the screen: the same gesture, with somewhere to drop. Column
+// hit-testing stays active for viewports where the target column IS visible.
+const KANBAN_TOUCH_STATUSES = ['planned', 'in_progress', 'waiting', 'testing', 'done']
+
+function buildTouchDropBar(currentStatus) {
+  const bar = document.createElement('div')
+  bar.className = 'kanban-touch-dropbar'
+  for (const s of KANBAN_TOUCH_STATUSES) {
+    const chip = document.createElement('div')
+    chip.className = 'kanban-drop-target'
+    chip.dataset.status = s
+    if (s === currentStatus) chip.classList.add('is-current')
+    chip.textContent = t(`kanban.status.${s}`)
+    bar.appendChild(chip)
+  }
+  document.body.appendChild(bar)
+  return bar
+}
+
+function kanbanDropTargetAt(x, y) {
+  const el = document.elementFromPoint(x, y)
+  return el ? el.closest('.kanban-drop-target') : null
+}
+
+function clearTouchDragHighlight() {
+  document.querySelectorAll('.kanban-col-body.drag-over, .kanban-drop-target.drag-over')
+    .forEach((c) => c.classList.remove('drag-over'))
+}
+
+function endTouchDrag() {
+  if (!touchDrag) return
+  clearTimeout(touchDrag.timer)
+  touchDrag.ghost?.remove()
+  touchDrag.dropBar?.remove()
+  touchDrag.el.classList.remove('dragging')
+  clearTouchDragHighlight()
+  document.removeEventListener('touchmove', kanbanTouchMove)
+  document.removeEventListener('touchend', kanbanTouchEnd)
+  document.removeEventListener('touchcancel', endTouchDrag)
+  touchDrag = null
+}
+
+// The ghost is deliberately NOT a full-size copy of the card: at full width it
+// covered three of the five drop targets, so the user could not see what they
+// were aiming at. It rides ABOVE the fingertip (see positionTouchGhost) for the
+// same reason -- the target under the finger has to stay visible.
+const TOUCH_GHOST_MAX_W = 200
+const TOUCH_GHOST_LIFT = 28
+
+function positionTouchGhost(x, y) {
+  const g = touchDrag.ghost
+  const gx = x - g.offsetWidth / 2
+  const gy = y - g.offsetHeight - TOUCH_GHOST_LIFT
+  g.style.transform = `translate(${Math.max(4, gx)}px, ${Math.max(4, gy)}px) rotate(2deg)`
+}
+
+function beginTouchDrag(x, y) {
+  if (!touchDrag) return
+  const el = touchDrag.el
+  const box = el.getBoundingClientRect()
+  const ghost = document.createElement('div')
+  ghost.className = 'kanban-card kanban-card-ghost'
+  ghost.textContent = touchDrag.card.title
+  ghost.style.cssText = `position:fixed; left:0; top:0; width:${Math.min(box.width, TOUCH_GHOST_MAX_W)}px; pointer-events:none; z-index:9999; opacity:.95; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; box-shadow:0 8px 24px rgba(0,0,0,.35)`
+  document.body.appendChild(ghost)
+  touchDrag.ghost = ghost
+  positionTouchGhost(x, y)
+  touchDrag.active = true
+  touchDrag.dropBar = buildTouchDropBar(touchDrag.card.status)
+  el.classList.add('dragging')
+  // Confirm the mode switch on devices that support it -- without a cursor,
+  // the only other signal that a long press "took" is the ghost appearing.
+  navigator.vibrate?.(10)
+}
+
+function kanbanTouchMove(e) {
+  if (!touchDrag || e.touches.length !== 1) return
+  const p = e.touches[0]
+  if (!touchDrag.active) {
+    // Still ambiguous: movement beyond the slop means the user is scrolling.
+    if (Math.abs(p.clientX - touchDrag.startX) > TOUCH_DRAG_SLOP_PX ||
+        Math.abs(p.clientY - touchDrag.startY) > TOUCH_DRAG_SLOP_PX) {
+      endTouchDrag()
+    }
+    return
+  }
+  e.preventDefault()
+  positionTouchGhost(p.clientX, p.clientY)
+  clearTouchDragHighlight()
+  // The drop bar sits above everything, so test it first -- a chip and a
+  // column body can overlap on screen.
+  const chip = kanbanDropTargetAt(p.clientX, p.clientY)
+  if (chip) { chip.classList.add('drag-over'); return }
+  const col = kanbanColBodyAt(p.clientX, p.clientY)
+  if (col) col.classList.add('drag-over')
+}
+
+async function kanbanTouchEnd(e) {
+  if (!touchDrag) return
+  if (!touchDrag.active) { endTouchDrag(); return }
+  const p = e.changedTouches[0]
+  const chip = kanbanDropTargetAt(p.clientX, p.clientY)
+  const col = chip ? null : kanbanColBodyAt(p.clientX, p.clientY)
+  const cardId = touchDrag.card.id
+  // The release that ends a drag would otherwise also register as a tap and
+  // open the detail modal on top of the board the user just rearranged.
+  touchDrag.el.dataset.suppressClick = '1'
+  // Read the drop position BEFORE endTouchDrag drops the .dragging class --
+  // getDragAfterElement excludes .dragging, which is what keeps the card from
+  // counting itself when it is dropped back into its own column.
+  let sortOrder = 0
+  let newStatus = null
+  if (chip) {
+    // Dropped on the status bar: no position information, so append.
+    newStatus = chip.dataset.status
+    sortOrder = document.querySelectorAll(`.kanban-col-body[data-status="${newStatus}"] .kanban-card`).length
+  } else if (col) {
+    newStatus = col.dataset.status
+    const after = getDragAfterElement(col, p.clientY)
+    const others = [...col.querySelectorAll('.kanban-card:not(.dragging)')]
+    sortOrder = after ? others.indexOf(after) : others.length
+  }
+  endTouchDrag()
+  // Released outside any target: treat as a cancelled drag, not a move.
+  // A drop inside a column always posts, even when the status is unchanged --
+  // that is a reorder within the column, which is just as valid a move.
+  if (!newStatus) return
+  try {
+    const r = await fetch(`/api/kanban/${encodeURIComponent(cardId)}/move`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ status: newStatus, sort_order: sortOrder }),
+    })
+    if (!r.ok) throw new Error('move failed')
+    loadKanban()
+  } catch {
+    showToast(t('kanban.toast.move_error'))
+  }
+}
+
+function wireKanbanCardTouchDnD(el, card) {
+  el.addEventListener('touchstart', (e) => {
+    if (e.touches.length !== 1) return
+    const p = e.touches[0]
+    endTouchDrag()
+    touchDrag = {
+      card, el, ghost: null, active: false,
+      startX: p.clientX, startY: p.clientY,
+      timer: setTimeout(() => beginTouchDrag(p.clientX, p.clientY), TOUCH_DRAG_DELAY_MS),
+    }
+    document.addEventListener('touchmove', kanbanTouchMove, { passive: false })
+    document.addEventListener('touchend', kanbanTouchEnd)
+    document.addEventListener('touchcancel', endTouchDrag)
+  }, { passive: true })
+
+  // A long press that turned into a drag must not also open the detail modal
+  // on release. The click listener in createCardEl fires after touchend, so
+  // the guard flag is read there.
+  el.addEventListener('click', (e) => {
+    if (el.dataset.suppressClick === '1') {
+      delete el.dataset.suppressClick
+      e.stopImmediatePropagation()
+      e.preventDefault()
+    }
+  }, true)
+}
 
 function getDragAfterElement(col, y) {
   const els = [...col.querySelectorAll('.kanban-card:not(.dragging)')]
@@ -1688,7 +1972,7 @@ async function showCardDetail(card) {
     </div>
     <div class="meta-item">
       <span class="meta-label">${t('kanban.meta.status')}</span>
-      <span class="meta-value">${statusLabels[card.status] || card.status}</span>
+      <span class="meta-value meta-value-editable" id="metaStatusValue" data-card-id="${card.id}" title="${t('kanban.meta.edit_tooltip')}">${statusLabels[card.status] || card.status}</span>
     </div>
     <div class="meta-item">
       <span class="meta-label">${t('kanban.meta.assignee')}</span>
@@ -1707,6 +1991,55 @@ async function showCardDetail(card) {
       <span class="meta-value">${card.due_date ? new Date(card.due_date * 1000).toLocaleDateString(_lang === 'en' ? 'en-US' : 'hu-HU') : t('kanban.meta.none')}</span>
     </div>
   `
+
+  // Inline edit for status on detail view. HTML5 drag & drop is the only way to
+  // change a card's column, and it is dead on touch devices (no dragstart is
+  // ever fired), so on a phone the board was effectively read-only. This is the
+  // pointer-independent path: tap the card, pick the new status. Mirrors the
+  // assignee editor below, but POSTs to /move rather than PUT -- /move is what
+  // recomputes sort_order AND fires the in_progress agent dispatch, which a
+  // plain PUT would silently skip.
+  const statusValueEl = document.getElementById('metaStatusValue')
+  statusValueEl.addEventListener('click', () => {
+    if (statusValueEl.querySelector('select')) return
+    const current = card.status
+    const sel = document.createElement('select')
+    sel.style.cssText = 'padding:2px 6px; border-radius:4px; border:1px solid var(--border); background:var(--bg-card); color:var(--text); font-size:inherit'
+    for (const s of ['planned', 'in_progress', 'waiting', 'testing', 'done']) {
+      const opt = document.createElement('option')
+      opt.value = s
+      opt.textContent = statusLabels[s] || s
+      if (s === current) opt.selected = true
+      sel.appendChild(opt)
+    }
+    statusValueEl.innerHTML = ''
+    statusValueEl.appendChild(sel)
+    sel.focus()
+    const restore = (status) => { statusValueEl.textContent = statusLabels[status] || status }
+    const save = async () => {
+      const newVal = sel.value
+      if (newVal === current) { restore(current); return }
+      try {
+        const r = await fetch(`/api/kanban/${encodeURIComponent(card.id)}/move`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ status: newVal, sort_order: 0 }),
+        })
+        if (!r.ok) throw new Error('move failed')
+        card.status = newVal
+        restore(newVal)
+        showToast(t('kanban.toast.status_updated'))
+        loadKanban && loadKanban()
+      } catch {
+        restore(current)
+        showToast(t('kanban.toast.move_error'))
+      }
+    }
+    sel.addEventListener('change', save)
+    sel.addEventListener('blur', () => {
+      if (statusValueEl.querySelector('select')) restore(card.status)
+    })
+  })
 
   // Inline edit for assignee on detail view
   const assigneeValueEl = document.getElementById('metaAssigneeValue')
@@ -2763,7 +3096,7 @@ function renderAgents() {
     const initial = label.charAt(0).toUpperCase()
     const gradientClass = getAvatarGradient(agent.name)
     const avatarHtml = (agent.hasImage || agent.hasAvatar)
-      ? `<img src="/api/agents/${encodeURIComponent(agent.name)}/avatar?t=${Date.now()}" alt="${escapeHtml(label)}">`
+      ? `<img src="/api/agents/${encodeURIComponent(agent.name)}/avatar${avatarBust()}" alt="${escapeHtml(label)}">`
       : initial
 
     const modelClass = agent.model && agent.model !== 'inherit' ? agent.model : ''
@@ -2832,6 +3165,46 @@ function renderAgents() {
     agentsGrid.insertBefore(card, addBtn)
   }
   renderFederatedAgentCards(agentsGrid, addBtn)
+  // Re-apply the live busy tint right after a re-render (renderAgents rebuilds
+  // the cards from scratch, dropping the class), so it never blinks off while
+  // the page is open.
+  if (agentsBusyTimer) refreshAgentTerminalBusy()
+}
+
+// === Agents: live "working" tint on Terminal buttons ===
+// Reuse the Activity page's data source (/api/agents/activity, same 3s poll,
+// same working/idle state derived from the tmux pane) to turn an agent card's
+// Terminal button green while that agent is actively working, and clear it when
+// it goes idle or stops. No new backend -- just a second consumer of the same
+// endpoint. The main (Marveen) card matches on mainAgentId(); sub-agent cards
+// match on their data-name.
+let agentsBusyTimer = null
+function startAgentsBusyPoll() {
+  refreshAgentTerminalBusy()
+  if (agentsBusyTimer) clearInterval(agentsBusyTimer)
+  agentsBusyTimer = setInterval(refreshAgentTerminalBusy, 3000)
+}
+function stopAgentsBusyPoll() {
+  if (agentsBusyTimer) { clearInterval(agentsBusyTimer); agentsBusyTimer = null }
+}
+async function refreshAgentTerminalBusy() {
+  if (!agentsGrid) return
+  let entries
+  try {
+    const res = await fetch('/api/agents/activity')
+    if (!res.ok) return
+    entries = await res.json()
+  } catch { return }
+  if (!Array.isArray(entries)) return
+  const stateByName = new Map(entries.map((e) => [e.name, e.state]))
+  const mainId = mainAgentId()
+  agentsGrid.querySelectorAll('.agent-card:not(.add-card)').forEach((card) => {
+    const btn = card.querySelector('.agent-terminal-btn')
+    if (!btn) return
+    const id = card.classList.contains('marveen-card') ? mainId : card.dataset.name
+    const working = !!id && stateByName.get(id) === 'working'
+    btn.classList.toggle('agent-terminal-btn--busy', working)
+  })
 }
 
 // Federated (remote-system) agents from the manifest-poller cache. Kept in a
@@ -3070,8 +3443,9 @@ function populateDetailAvatarGrid() {
         })
         if (!res.ok) throw new Error()
         showToast(t('agents.toast.avatar_updated'))
+        bumpAvatarEpoch()
         // Update the detail avatar display
-        document.getElementById('agentDetailAvatar').innerHTML = `<img src="/api/agents/${encodeURIComponent(currentAgent.name)}/avatar?t=${Date.now()}" alt="">`
+        document.getElementById('agentDetailAvatar').innerHTML = `<img src="/api/agents/${encodeURIComponent(currentAgent.name)}/avatar${avatarBust()}" alt="">`
         document.getElementById('detailAvatarGallery').hidden = true
         loadAgents()
       } catch {
@@ -3104,6 +3478,7 @@ document.getElementById('avatarChangeBtn').addEventListener('click', () => {
           })
           if (!res.ok) throw new Error()
           showToast(t('agents.toast.avatar_updated'))
+          bumpAvatarEpoch()
           const imgUrl = isMarveen ? mainAgentAvatarUrl(Date.now()) : `/api/agents/${encodeURIComponent(currentAgent.name)}/avatar?t=${Date.now()}`
           document.getElementById('agentDetailAvatar').innerHTML = `<img src="${imgUrl}" alt="">`
           gallery.hidden = true
@@ -3178,6 +3553,7 @@ document.getElementById('avatarChangeBtn').addEventListener('click', () => {
       const res = await fetch(endpoint, { method: 'POST', body: form })
       if (!res.ok) throw new Error()
       showToast(t('agents.toast.avatar_uploaded'))
+      bumpAvatarEpoch()
       const imgUrl = isMarveen ? mainAgentAvatarUrl(Date.now()) : `/api/agents/${encodeURIComponent(currentAgent.name)}/avatar?t=${Date.now()}`
       document.getElementById('agentDetailAvatar').innerHTML = `<img src="${imgUrl}" alt="">`
       document.getElementById('detailAvatarGallery').hidden = true
@@ -5465,7 +5841,7 @@ function makeScheduleRow(task) {
 
     row.innerHTML = `
       <div class="schedule-agent-avatar">
-        <img src="${agent.avatar}?t=${Date.now()}" alt="" onerror="this.style.display='none'">
+        <img src="${agent.avatar}${avatarBust()}" alt="" onerror="this.style.display='none'">
       </div>
       <div class="schedule-info">
         <div class="schedule-title">
@@ -5653,7 +6029,7 @@ function renderTimeline(tasks) {
     row.innerHTML = `
       <div class="timeline-agent">
         <div class="timeline-agent-avatar">
-          <img src="${agent.avatar}?t=${Date.now()}" alt="" onerror="this.style.display='none'">
+          <img src="${agent.avatar}${avatarBust()}" alt="" onerror="this.style.display='none'">
         </div>
         <span class="timeline-agent-name">${escapeHtml(agent.label || agent.name)}</span>
       </div>
@@ -5673,7 +6049,7 @@ function renderTimeline(tasks) {
         marker.className = 'timeline-marker' + (task.enabled ? '' : ' disabled')
         marker.style.left = `calc(${pct}% - 16px)`
         marker.innerHTML = `
-          <img src="${agent.avatar}?t=${Date.now()}" alt="" onerror="this.style.display='none'">
+          <img src="${agent.avatar}${avatarBust()}" alt="" onerror="this.style.display='none'">
           <div class="timeline-marker-tooltip">${escapeHtml(task.description || task.name)} - ${h.toString().padStart(2, '0')}:${minute.toString().padStart(2, '0')}</div>
         `
         marker.addEventListener('click', () => openEditSchedule(task))
@@ -5807,7 +6183,7 @@ function renderWeekView(data) {
         }
 
         card.innerHTML = `
-          <div class="week-task-avatar"><img src="${agent.avatar}?t=${Date.now()}" alt=""></div>
+          <div class="week-task-avatar"><img src="${agent.avatar}${avatarBust()}" alt=""></div>
           <div class="week-task-info">
             <div class="week-task-time">${timeLabel}</div>
             <div class="week-task-name">${escapeHtml(task.description || task.name)}</div>
@@ -10271,7 +10647,7 @@ async function openSkillDetail(skillName, displayLabel, agentId = null) {
   }
 })()
 
-// === Team page ===
+// === Team org-chart (now embedded in Agents page, tree view) ===
 async function loadTeamGraph() {
   const container = document.getElementById('teamGraph')
   if (!container) return
@@ -10280,21 +10656,65 @@ async function loadTeamGraph() {
     const res = await fetch('/api/team/graph')
     if (!res.ok) throw new Error('HTTP ' + res.status)
     const data = await res.json()
-    renderTeamGraph(container, data)
+    renderTeamGraph(container, data, { editable: true })
   } catch (err) {
     container.innerHTML = `<div class="team-empty">${t('team.error', { msg: err.message || err })}</div>`
   }
 }
 
-function renderTeamGraph(container, data) {
+// Persist a drag-and-drop reporting change: `childId` now reports to `parentId`.
+// Guards (also enforced server-side) keep the caller from creating a cycle or
+// writing a no-op. On success the graph is reloaded so the tree re-lays-out.
+async function saveTeamReportsTo(childId, parentId, ctx) {
+  const { byId, parentOf, descendantsOf, mainAgentId } = ctx
+  if (!childId || childId === parentId || childId === mainAgentId) return
+  if (parentOf.get(childId) === parentId) return  // already the parent
+  if (descendantsOf(childId).has(parentId)) { showToast(t('team.drop.cycle')); return }
+  try {
+    const r = await fetch(`/api/agents/${encodeURIComponent(childId)}/team`, {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ reportsTo: parentId }),
+    })
+    if (!r.ok) throw new Error('HTTP ' + r.status)
+    const result = await r.json().catch(() => ({}))
+    if (result.cycleRejected) { showToast(t('team.drop.cycle')); return }
+    const childLabel = (byId.get(childId) || {}).label || childId
+    const parentLabel = (byId.get(parentId) || {}).label || parentId
+    showToast(t('team.drop.saved', { child: childLabel, parent: parentLabel }))
+    loadTeamGraph()
+  } catch {
+    showToast(t('team.drop.error'))
+  }
+}
+
+function renderTeamGraph(container, data, opts = {}) {
+  const editable = !!opts.editable
   const { nodes, edges, mainAgentId } = data
   container.innerHTML = ''
   const byId = new Map(nodes.map(n => [n.id, n]))
   const childrenOf = new Map()
+  const parentOf = new Map()
   for (const n of nodes) childrenOf.set(n.id, [])
   for (const e of edges) {
     if (childrenOf.has(e.from)) childrenOf.get(e.from).push(e.to)
+    parentOf.set(e.to, e.from)
   }
+  // Transitive reports of `id` (its whole subtree). Used to reject dropping a
+  // manager onto one of its own reports, which would orphan the subtree.
+  const descendantsOf = (id) => {
+    const out = new Set()
+    const walk = (x) => {
+      for (const c of (childrenOf.get(x) || [])) {
+        if (!out.has(c)) { out.add(c); walk(c) }
+      }
+    }
+    walk(id)
+    return out
+  }
+  const dropCtx = { byId, parentOf, descendantsOf, mainAgentId }
+  // A single dragged id shared across all nodes' dragover handlers so they can
+  // validate the target (dataTransfer payload is unreadable during dragover).
+  let draggingId = null
   const renderNode = (node) => {
     const div = document.createElement('div')
     div.className = 'team-node'
@@ -10303,8 +10723,8 @@ function renderTeamGraph(container, data) {
     const roleLabel = node.role === 'main' ? t('team.role.main') : (node.role === 'leader' ? t('team.role.leader') : t('team.role.member'))
     const running = node.running ? t('team.running') : t('team.stopped')
     const avatarUrl = node.id === mainAgentId
-      ? mainAgentAvatarUrl(Date.now())
-      : `/api/agents/${encodeURIComponent(node.id)}/avatar?t=${Date.now()}`
+      ? `${mainAgentAvatarUrl()}${avatarBust()}`
+      : `/api/agents/${encodeURIComponent(node.id)}/avatar${avatarBust()}`
     div.innerHTML = `
       <div class="team-node-avatar"><img src="${avatarUrl}" alt="${escapeHtml(node.label || node.id)}" onerror="this.style.display='none'"></div>
       <div class="team-node-name">${escapeHtml(node.label || node.id)}</div>
@@ -10313,6 +10733,42 @@ function renderTeamGraph(container, data) {
     `
     if (node.id !== mainAgentId) {
       div.addEventListener('click', () => openAgentDetail(node.id))
+    }
+    // Drag-and-drop reporting edit (Team page only). Any agent except the main
+    // one can be dragged; any node can be a drop target (dropping onto the main
+    // agent makes the report a direct report of it).
+    if (editable) {
+      if (node.id !== mainAgentId) {
+        div.draggable = true
+        div.classList.add('team-draggable')
+        div.addEventListener('dragstart', (e) => {
+          draggingId = node.id
+          e.dataTransfer.setData('text/plain', node.id)
+          e.dataTransfer.effectAllowed = 'move'
+          div.classList.add('team-dragging')
+        })
+        div.addEventListener('dragend', () => {
+          draggingId = null
+          div.classList.remove('team-dragging')
+        })
+      }
+      const isValidTarget = () =>
+        draggingId && draggingId !== node.id &&
+        parentOf.get(draggingId) !== node.id &&
+        !descendantsOf(draggingId).has(node.id)
+      div.addEventListener('dragover', (e) => {
+        if (!isValidTarget()) return  // no preventDefault -> shows "no drop"
+        e.preventDefault()
+        e.dataTransfer.dropEffect = 'move'
+        div.classList.add('team-drop-target')
+      })
+      div.addEventListener('dragleave', () => div.classList.remove('team-drop-target'))
+      div.addEventListener('drop', (e) => {
+        e.preventDefault()
+        div.classList.remove('team-drop-target')
+        const childId = e.dataTransfer.getData('text/plain') || draggingId
+        saveTeamReportsTo(childId, node.id, dropCtx)
+      })
     }
     return div
   }
@@ -10382,8 +10838,30 @@ function renderTeamGraph(container, data) {
   }
 }
 
-const refreshTeamBtn = document.getElementById('refreshTeamBtn')
-if (refreshTeamBtn) refreshTeamBtn.addEventListener('click', loadTeamGraph)
+// === Agents page: grid / org-chart view toggle ===
+// Persists the chosen view for the session so navigating away and back keeps
+// the last selection. Defaults to 'grid'.
+let _agentsActiveView = 'grid'
+
+function _setAgentsView(view) {
+  _agentsActiveView = view
+  const gridView = document.getElementById('agentsGridView')
+  const treeView = document.getElementById('agentsTreeView')
+  const gridBtn  = document.getElementById('agentsViewGrid')
+  const treeBtn  = document.getElementById('agentsViewTree')
+  if (!gridView || !treeView) return
+  const showGrid = view === 'grid'
+  gridView.hidden = !showGrid
+  treeView.hidden = showGrid
+  if (gridBtn) gridBtn.classList.toggle('active', showGrid)
+  if (treeBtn) treeBtn.classList.toggle('active', !showGrid)
+  if (!showGrid) loadTeamGraph()
+}
+
+const _agentsViewGridBtn = document.getElementById('agentsViewGrid')
+const _agentsViewTreeBtn = document.getElementById('agentsViewTree')
+if (_agentsViewGridBtn) _agentsViewGridBtn.addEventListener('click', () => _setAgentsView('grid'))
+if (_agentsViewTreeBtn) _agentsViewTreeBtn.addEventListener('click', () => _setAgentsView('tree'))
 
 // === Team: inter-agent message log + compose ===
 // View the /api/messages queue and let the operator send a message to an agent
@@ -10441,8 +10919,8 @@ function chatAvatarHtml(agentName, size = 32) {
   const hasAvatar = chatAgentHasAvatar.get(lower)
   if (!hasAvatar) return chatMonogramEl(agentName, size)
   const src = lower === mainAgentId().toLowerCase()
-    ? mainAgentAvatarUrl(Date.now())
-    : `/api/agents/${encodeURIComponent(lower)}/avatar?t=${Date.now()}`
+    ? `${mainAgentAvatarUrl()}${avatarBust()}`
+    : `/api/agents/${encodeURIComponent(lower)}/avatar${avatarBust()}`
   return `<img class="chat-avatar" src="${src}" width="${size}" height="${size}" alt="${escapeHtml(agentName)}" data-agent-name="${escapeHtml(agentName)}" onerror="chatImgError(this)">`
 }
 
@@ -10612,18 +11090,31 @@ async function loadChatThread(agentName) {
   const threadDisplayName = owner && agentName === owner ? owner + ' (te)' : chatDisplayName(agentName)
 
   panel.innerHTML = `
-    <div class="chat-thread-header">
-      ${chatAvatarHtml(agentName, 32)}
-      <span class="chat-thread-title">${escapeHtml(threadDisplayName)}</span>
-      <button class="btn-secondary btn-compact" style="margin-left:auto" onclick="loadChatThread('${escapeHtml(agentName)}')">
-        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
-      </button>
+    <div class="chat-upper-pane" id="chatUpperPane" style="flex:1 1 55%;min-height:180px">
+      <div class="chat-thread-header">
+        ${chatAvatarHtml(agentName, 32)}
+        <span class="chat-thread-title">${escapeHtml(threadDisplayName)}</span>
+        <button class="btn-secondary btn-compact" style="margin-left:auto" onclick="loadChatThread('${escapeHtml(agentName)}')">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
+        </button>
+      </div>
+      <div class="chat-bubbles" id="chatBubbles"><div class="chat-loading-indicator" id="chatLoadingTop" style="display:none;text-align:center;padding:8px;font-size:11px;color:var(--text-muted)">${t('messages.loading')}</div></div>
+      <div class="chat-compose">
+        <div class="chat-compose-row">
+          <textarea id="chatComposeText" class="chat-compose-input" rows="2" placeholder="${t('messages.placeholder', { agent: escapeHtml(chatDisplayName(agentName)) })}"></textarea>
+          <button class="btn-primary btn-compact chat-send-btn" id="chatSendBtn">${t('messages.send_btn')}</button>
+        </div>
+      </div>
     </div>
-    <div class="chat-bubbles" id="chatBubbles"><div class="chat-loading-indicator" id="chatLoadingTop" style="display:none;text-align:center;padding:8px;font-size:11px;color:var(--text-muted)">${t('messages.loading')}</div></div>
-    <div class="chat-compose">
-      <div class="chat-compose-row">
-        <textarea id="chatComposeText" class="chat-compose-input" rows="2" placeholder="${t('messages.placeholder', { agent: escapeHtml(chatDisplayName(agentName)) })}"></textarea>
-        <button class="btn-primary btn-compact chat-send-btn" id="chatSendBtn">${t('messages.send_btn')}</button>
+    <div class="trace-resize-handle" id="traceResizeHandle"></div>
+    <div class="trace-waterfall-panel" id="traceWaterfallPanel" style="flex:0 0 45%;min-height:140px">
+      <div class="trace-waterfall-header">
+        <span class="trace-waterfall-title">Trace</span>
+        <select class="trace-select" id="traceSelect"><option value="">-- ${t('trace.loading')} --</option></select>
+        <span id="traceStatusBadge"></span>
+      </div>
+      <div class="trace-waterfall-body" id="traceWaterfallBody">
+        <div class="trace-waterfall-empty">${t('trace.no_traces')}</div>
       </div>
     </div>
   `
@@ -10657,6 +11148,158 @@ async function loadChatThread(agentName) {
         fetchChatPage(agentName, chatThreadState.minLoadedId, CHAT_LOAD_MORE, 'prepend')
       }
     })
+  }
+
+  // Resize handle: drag to split chat / waterfall vertically
+  initTraceResizeHandle()
+
+  // Load trace waterfall for this agent
+  loadTraceWaterfall(agentName)
+}
+
+// --- Trace Waterfall (card def5a189) ---
+const AGENT_COLORS = ['#d97757','#00C2A8','#818cf8','#22c55e','#f59e0b','#ec4899','#06b6d4','#a855f7']
+function agentColor(name) {
+  return AGENT_COLORS[name.split('').reduce((a,c) => a + c.charCodeAt(0), 0) % AGENT_COLORS.length]
+}
+
+function initTraceResizeHandle() {
+  const handle = document.getElementById('traceResizeHandle')
+  const upper  = document.getElementById('chatUpperPane')
+  const lower  = document.getElementById('traceWaterfallPanel')
+  if (!handle || !upper || !lower) return
+  let dragging = false, startY = 0, startUpper = 0
+  handle.addEventListener('mousedown', e => {
+    dragging = true; startY = e.clientY; startUpper = upper.offsetHeight
+    handle.classList.add('dragging'); e.preventDefault()
+  })
+  window.addEventListener('mousemove', e => {
+    if (!dragging) return
+    const dy = e.clientY - startY
+    const newH = Math.max(120, startUpper + dy)
+    upper.style.flex = `0 0 ${newH}px`
+  })
+  window.addEventListener('mouseup', () => {
+    if (dragging) { dragging = false; handle.classList.remove('dragging') }
+  })
+}
+
+async function loadTraceWaterfall(agentName) {
+  const sel = document.getElementById('traceSelect')
+  const body = document.getElementById('traceWaterfallBody')
+  if (!sel || !body) return
+  try {
+    const res = await fetch('/api/traces?limit=100')
+    if (!res.ok) throw new Error(res.status)
+    const all = await res.json()
+    // Show traces that involve this agent (as root or any span)
+    const relevant = all.filter(tr => tr.root_agent === agentName)
+    sel.innerHTML = relevant.length === 0
+      ? `<option value="">${t('trace.no_traces')}</option>`
+      : relevant.map(tr => {
+          const dt = tr.start_ms ? new Date(tr.start_ms).toLocaleString('hu-HU', {month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'}) : ''
+          const dur = tr.end_ms && tr.start_ms ? `${((tr.end_ms - tr.start_ms)/1000).toFixed(1)}s` : '...'
+          return `<option value="${escapeHtml(tr.trace_id)}">[${dt}] ${escapeHtml(tr.root_operation)} ${dur} (${tr.span_count} span)</option>`
+        }).join('')
+    sel.addEventListener('change', () => {
+      if (sel.value) renderTraceWaterfall(sel.value)
+      else body.innerHTML = `<div class="trace-waterfall-empty">${t('trace.no_traces')}</div>`
+    })
+    if (relevant.length > 0) renderTraceWaterfall(relevant[0].trace_id)
+  } catch {
+    body.innerHTML = `<div class="trace-waterfall-empty">${t('trace.load_error')}</div>`
+  }
+}
+
+async function renderTraceWaterfall(traceId) {
+  const body = document.getElementById('traceWaterfallBody')
+  const badge = document.getElementById('traceStatusBadge')
+  if (!body) return
+
+  // Re-render when the resize handle moves the panel boundary (debounced 60ms)
+  if (body._traceObsId !== traceId) {
+    if (body._traceResizeObs) body._traceResizeObs.disconnect()
+    let _rTimer = null
+    const ro = new ResizeObserver(() => {
+      clearTimeout(_rTimer)
+      _rTimer = setTimeout(() => renderTraceWaterfall(traceId), 60)
+    })
+    ro.observe(body)
+    body._traceResizeObs = ro
+    body._traceObsId = traceId
+  }
+
+  try {
+    const res = await fetch(`/api/traces/${encodeURIComponent(traceId)}`)
+    if (!res.ok) throw new Error(res.status)
+    const { spans } = await res.json()
+    if (!spans || !spans.length) {
+      body.innerHTML = `<div class="trace-waterfall-empty">${t('trace.no_spans')}</div>`
+      return
+    }
+    // Compute time range
+    const minMs = Math.min(...spans.map(s => s.start_ms))
+    const maxRaw = Math.max(...spans.map(s => s.end_ms || s.start_ms + 1))
+    const totalMs = Math.max(maxRaw - minMs, 1)
+    const now = Date.now()
+
+    // Layout: measure actual container so bars fill the full width and height
+    const svgW = body.clientWidth || 600
+    const LABEL_W = 110, AXIS_H = 18, PAD_R = 8
+    const ROW_H = Math.max(24, Math.floor((body.clientHeight - AXIS_H) / spans.length))
+    const barArea = svgW - LABEL_W - PAD_R
+    const svgH = spans.length * ROW_H + AXIS_H
+
+    // Badge
+    const hasError = spans.some(s => s.status === 'error')
+    const hasRunning = spans.some(s => s.status === 'running')
+    if (badge) {
+      const cls = hasError ? 'trace-status-error' : hasRunning ? 'trace-status-running' : 'trace-status-ok'
+      const lbl = hasError ? t('trace.status.error') : hasRunning ? t('trace.status.running') : t('trace.status.ok')
+      badge.innerHTML = `<span class="trace-status-badge ${cls}">${lbl}</span>`
+    }
+
+    // Find bottleneck span (longest duration)
+    const durations = spans.map(s => (s.end_ms || now) - s.start_ms)
+    const maxDur = Math.max(...durations)
+
+    let rows = ''
+    spans.forEach((s, i) => {
+      const y = i * ROW_H + AXIS_H
+      const startOff = s.start_ms - minMs
+      const dur = (s.end_ms || now) - s.start_ms
+      const x = LABEL_W + (startOff / totalMs) * barArea
+      const w = Math.max(3, (dur / totalMs) * barArea)
+      const color = agentColor(s.agent_id)
+      const isBottleneck = dur === maxDur && spans.length > 1
+      const isRunning = s.status === 'running'
+      const isError = s.status === 'error'
+      const label = s.agent_id.length > 13 ? s.agent_id.slice(0,12) + '…' : s.agent_id
+      const durLabel = dur >= 1000 ? `${(dur/1000).toFixed(1)}s` : `${dur}ms`
+      rows += `<rect class="trace-wf-row-bg" x="0" y="${y}" width="${svgW}" height="${ROW_H}"/>`
+      rows += `<text class="trace-wf-label" x="6" y="${y + ROW_H*0.65}">${escapeHtml(label)}</text>`
+      rows += `<rect class="trace-wf-bar${isRunning?' trace-wf-bar-running':''}${isError?' trace-wf-bar-error':''}"
+        x="${x.toFixed(1)}" y="${(y+4).toFixed(1)}" width="${w.toFixed(1)}" height="${ROW_H-8}"
+        rx="3" fill="${isError ? 'var(--danger)' : color}" opacity="${isError?0.7:0.85}"/>`
+      if (isBottleneck) {
+        rows += `<line class="trace-bottleneck" x1="${(x+w).toFixed(1)}" y1="${AXIS_H}" x2="${(x+w).toFixed(1)}" y2="${svgH}"/>`
+      }
+      rows += `<text class="trace-wf-axis-label" x="${Math.min(x+w+3,svgW-30).toFixed(1)}" y="${(y+ROW_H*0.65).toFixed(1)}" fill="${color}">${durLabel}</text>`
+    })
+
+    // Axis ticks (4 ticks)
+    let axis = ''
+    for (let i = 0; i <= 4; i++) {
+      const xPos = LABEL_W + (i / 4) * barArea
+      const msVal = (i / 4) * totalMs
+      const lbl = msVal >= 1000 ? `${(msVal/1000).toFixed(1)}s` : `${Math.round(msVal)}ms`
+      axis += `<line class="trace-wf-axis-line" x1="${xPos.toFixed(1)}" y1="${AXIS_H}" x2="${xPos.toFixed(1)}" y2="${svgH}"/>`
+      axis += `<text class="trace-wf-axis-label" x="${xPos.toFixed(1)}" y="${AXIS_H-4}" text-anchor="middle">${lbl}</text>`
+    }
+
+    body.innerHTML = `<svg class="trace-wf-svg" viewBox="0 0 ${svgW} ${svgH}" style="height:${svgH}px">${axis}${rows}</svg>`
+  } catch {
+    body.innerHTML = `<div class="trace-waterfall-empty">${t('trace.load_error')}</div>`
   }
 }
 
@@ -10957,7 +11600,7 @@ async function loadOverview() {
 async function initSidebarBrand() {
   try {
     const img = document.createElement('img')
-    img.src = mainAgentAvatarUrl(Date.now())
+    img.src = mainAgentAvatarUrl() + avatarBust()
     img.onload = () => {
       const mark = document.getElementById('sidebarBrandMark')
       if (mark) { mark.textContent = ''; mark.appendChild(img) }
@@ -11022,11 +11665,75 @@ function renderUpdatesBadge(status) {
   }
 }
 
+// === Branch-drift warning ===
+// Installs that landed on a non-main branch (e.g. a branchless clone before
+// the --branch main pin) keep receiving unreleased code from update.sh, which
+// pulls the tracked branch. Two surfaces, both non-blocking: a dismissible
+// top banner (dismissal persists per browser AND per branch, so a later switch
+// to yet another branch re-warns) and a permanent notice on the Updates page.
+// Dev machines follow develop on purpose; one dismissal silences the banner
+// for them while the Updates-page notice stays as the quiet ground truth.
+const BRANCH_DRIFT_DISMISS_PREFIX = 'marveen.branch-drift-dismissed.'
+const BRANCH_HEAL_COMMAND = 'git checkout main && bash update.sh'
+
+function branchDriftDismissed(branch) {
+  try { return localStorage.getItem(BRANCH_DRIFT_DISMISS_PREFIX + branch) === '1' } catch { return false }
+}
+
+function updateBranchDriftUI(status) {
+  const banner = document.getElementById('branchDriftBanner')
+  if (!banner) return
+  const branch = status && status.branch
+  const drifted = !!branch && branch !== 'main'
+  if (!drifted || branchDriftDismissed(branch)) {
+    banner.hidden = true
+    return
+  }
+  const textEl = document.getElementById('branchDriftBannerText')
+  if (textEl) {
+    textEl.innerHTML =
+      `${t('branch_drift.banner.text', { branch: `<strong>${escapeHtmlUpdates(branch)}</strong>` })} ` +
+      `<code>${BRANCH_HEAL_COMMAND}</code>`
+  }
+  banner.hidden = false
+}
+
+function wireBranchDriftBanner() {
+  const dismiss = document.getElementById('branchDriftDismiss')
+  if (!dismiss) return
+  dismiss.addEventListener('click', () => {
+    const banner = document.getElementById('branchDriftBanner')
+    const branch = (window._updatesStatus && window._updatesStatus.branch) || ''
+    try { if (branch) localStorage.setItem(BRANCH_DRIFT_DISMISS_PREFIX + branch, '1') } catch { /* storage blocked */ }
+    if (banner) banner.hidden = true
+  })
+}
+
+function renderBranchNotice(status) {
+  const el = document.getElementById('updatesBranchNotice')
+  if (!el) return
+  const branch = status && status.branch
+  if (!branch) { el.hidden = true; return }
+  if (branch === 'main') {
+    el.className = 'updates-branch-notice ok'
+    el.innerHTML = `${t('branch_drift.notice.on_main')} (<code>main</code>)`
+  } else {
+    el.className = 'updates-branch-notice warn'
+    el.innerHTML =
+      `${t('branch_drift.notice.off_main', { branch: `<code>${escapeHtmlUpdates(branch)}</code>` })}<br>` +
+      `${t('branch_drift.notice.heal')} <code>${BRANCH_HEAL_COMMAND}</code>`
+  }
+  el.hidden = false
+}
+
 async function pollUpdatesBadge() {
   try {
     const res = await fetch('/api/updates')
     if (!res.ok) return
-    renderUpdatesBadge(await res.json())
+    const data = await res.json()
+    window._updatesStatus = data
+    renderUpdatesBadge(data)
+    updateBranchDriftUI(data)
   } catch {}
 }
 
@@ -11041,7 +11748,10 @@ async function loadUpdates() {
     const res = await fetch('/api/updates')
     if (!res.ok) throw new Error('HTTP ' + res.status)
     const data = await res.json()
+    window._updatesStatus = data
     renderUpdatesBadge(data)
+    updateBranchDriftUI(data)
+    renderBranchNotice(data)
     const cur = (data.current || '').slice(0, 7) || '–'
     const lat = (data.latest || '').slice(0, 7) || '–'
     if (data.error) {
@@ -12260,6 +12970,162 @@ function markSettingDirty(key, input, originalValue, type, errorEl) {
 
 const SETTINGS_ACTIVE_TAB_KEY = 'settings-active-tab'
 
+// === Dashboard browser login (optional) ===
+// The card in the Settings page lets the operator opt into a username+password
+// login (in addition to the always-available access token). All copy is framed
+// around the existing public remote-access surfaces (Tailscale Serve, LAN,
+// mobile QR) -- no other transport is referenced.
+
+async function fetchAuthStatus() {
+  try {
+    const r = await fetch('/api/auth/status')
+    return r.ok ? await r.json() : null
+  } catch {
+    return null
+  }
+}
+
+async function renderAuthCard() {
+  const body = document.getElementById('authCardBody')
+  if (!body) return
+  const status = await fetchAuthStatus()
+  if (!status) { body.innerHTML = `<p class="auth-muted">${t('auth.card.unavailable')}</p>`; return }
+  if (status.setup_required) { renderCreateLoginForm(body); return }
+  if (status.method === 'session') { renderSessionPanel(body, status); return }
+  renderTokenModePanel(body)
+}
+
+function renderCreateLoginForm(body) {
+  body.innerHTML =
+    `<p class="auth-muted">${t('auth.card.setup_desc')}</p>` +
+    `<div class="auth-form">` +
+      `<input id="authNewUser" type="text" autocomplete="username" autocapitalize="off" spellcheck="false" placeholder="${t('auth.login.username')}">` +
+      `<input id="authNewPass" type="password" autocomplete="new-password" placeholder="${t('auth.card.new_password')}">` +
+      `<input id="authNewPass2" type="password" autocomplete="new-password" placeholder="${t('auth.card.repeat_password')}">` +
+      `<button class="btn-primary" id="authCreateBtn">${t('auth.card.create')}</button>` +
+      `<div class="auth-form-msg" id="authCreateMsg"></div>` +
+    `</div>`
+  document.getElementById('authCreateBtn').addEventListener('click', async () => {
+    const msg = document.getElementById('authCreateMsg')
+    const username = (document.getElementById('authNewUser').value || '').trim()
+    const p1 = document.getElementById('authNewPass').value || ''
+    const p2 = document.getElementById('authNewPass2').value || ''
+    msg.className = 'auth-form-msg'
+    if (!username || !p1) { msg.classList.add('err'); msg.textContent = t('auth.login.err_empty'); return }
+    if (p1 !== p2) { msg.classList.add('err'); msg.textContent = t('auth.card.err_mismatch'); return }
+    try {
+      const r = await fetch('/api/auth/users', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username, password: p1 }),
+      })
+      const data = await r.json().catch(() => ({}))
+      if (r.ok) { msg.classList.add('ok'); msg.textContent = t('auth.card.created'); renderAuthCard(); initAuthBanner() }
+      else { msg.classList.add('err'); msg.textContent = data.error || t('auth.card.err_generic') }
+    } catch { msg.classList.add('err'); msg.textContent = t('auth.login.err_network') }
+  })
+}
+
+function renderSessionPanel(body, status) {
+  body.innerHTML =
+    `<p class="auth-muted">${t('auth.card.signed_in_as', { user: escapeHtml(status.user) })}</p>` +
+    `<div class="auth-form">` +
+      `<input id="authCurPass" type="password" autocomplete="current-password" placeholder="${t('auth.card.current_password')}">` +
+      `<input id="authChgPass" type="password" autocomplete="new-password" placeholder="${t('auth.card.new_password')}">` +
+      `<input id="authChgPass2" type="password" autocomplete="new-password" placeholder="${t('auth.card.repeat_password')}">` +
+      `<button class="btn-primary" id="authChgBtn">${t('auth.card.change_password')}</button>` +
+      `<div class="auth-form-msg" id="authChgMsg"></div>` +
+    `</div>` +
+    `<div class="auth-sessions" id="authSessions"></div>` +
+    `<div class="auth-actions">` +
+      `<button class="btn-secondary btn-compact" id="authLogoutAllBtn">${t('auth.card.logout_all')}</button>` +
+      `<button class="btn-secondary btn-compact" id="authLogoutBtn">${t('auth.card.logout')}</button>` +
+    `</div>`
+  document.getElementById('authChgBtn').addEventListener('click', async () => {
+    const msg = document.getElementById('authChgMsg')
+    const cur = document.getElementById('authCurPass').value || ''
+    const p1 = document.getElementById('authChgPass').value || ''
+    const p2 = document.getElementById('authChgPass2').value || ''
+    msg.className = 'auth-form-msg'
+    if (p1 !== p2) { msg.classList.add('err'); msg.textContent = t('auth.card.err_mismatch'); return }
+    try {
+      const r = await fetch('/api/auth/password', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ current_password: cur, new_password: p1 }),
+      })
+      const data = await r.json().catch(() => ({}))
+      if (r.ok) { msg.classList.add('ok'); msg.textContent = t('auth.card.password_changed') }
+      else { msg.classList.add('err'); msg.textContent = data.error || t('auth.card.err_generic') }
+    } catch { msg.classList.add('err'); msg.textContent = t('auth.login.err_network') }
+  })
+  document.getElementById('authLogoutBtn').addEventListener('click', async () => {
+    try { await fetch('/api/auth/logout', { method: 'POST' }) } catch { /* ignore */ }
+    window.location.reload()
+  })
+  document.getElementById('authLogoutAllBtn').addEventListener('click', async () => {
+    try { await fetch('/api/auth/logout-all', { method: 'POST' }) } catch { /* ignore */ }
+    window.location.reload()
+  })
+  renderAuthSessions()
+}
+
+async function renderAuthSessions() {
+  const el = document.getElementById('authSessions')
+  if (!el) return
+  try {
+    const r = await fetch('/api/auth/sessions')
+    if (!r.ok) { el.innerHTML = ''; return }
+    const { sessions } = await r.json()
+    if (!sessions || !sessions.length) { el.innerHTML = ''; return }
+    el.innerHTML = `<div class="auth-sessions-title">${t('auth.card.active_sessions')}</div>` +
+      sessions.map((s) => {
+        const last = new Date(s.lastSeenAt * 1000).toLocaleString()
+        const ua = escapeHtml(s.userAgent || '-')
+        return `<div class="auth-session-row"><code>${escapeHtml(s.idHashPrefix)}</code><span>${last}</span><span class="auth-session-ua">${ua}</span></div>`
+      }).join('')
+  } catch { el.innerHTML = '' }
+}
+
+function renderTokenModePanel(body) {
+  body.innerHTML =
+    `<p class="auth-muted">${t('auth.card.token_mode')}</p>`
+}
+
+// Dismissible setup banner: shown only when the operator is authed via the token
+// and has not yet created a browser login. Dismissal persists per browser.
+const AUTH_BANNER_DISMISS_KEY = 'marveen.auth-banner-dismissed'
+
+async function initAuthBanner() {
+  const banner = document.getElementById('authSetupBanner')
+  if (!banner) return
+  let dismissed = false
+  try { dismissed = localStorage.getItem(AUTH_BANNER_DISMISS_KEY) === '1' } catch { /* storage blocked */ }
+  const status = await fetchAuthStatus()
+  const show = !!status && status.authenticated && status.method === 'token' && status.setup_required && !dismissed
+  banner.hidden = !show
+}
+
+function wireAuthBanner() {
+  const banner = document.getElementById('authSetupBanner')
+  if (!banner) return
+  const dismiss = document.getElementById('authBannerDismiss')
+  const go = document.getElementById('authBannerGoBtn')
+  if (dismiss) dismiss.addEventListener('click', () => {
+    try { localStorage.setItem(AUTH_BANNER_DISMISS_KEY, '1') } catch { /* storage blocked */ }
+    banner.hidden = true
+  })
+  if (go) go.addEventListener('click', () => {
+    if (typeof switchPage === 'function') switchPage('settings')
+    const link = document.querySelector('.sb-link[data-page="settings"]')
+    if (link) { document.querySelectorAll('.sb-link').forEach((l) => l.classList.remove('active')); link.classList.add('active') }
+  })
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+  wireAuthBanner()
+  initAuthBanner()
+  wireBranchDriftBanner()
+})
+
 async function loadSettings() {
   const tabNav = document.getElementById('settingsTabNav')
   const tabPanels = document.getElementById('settingsTabPanels')
@@ -12269,6 +13135,8 @@ async function loadSettings() {
   tabPanels.innerHTML = ''
   settingsDirty.clear()
   updateSettingsSaveBar()
+
+  renderAuthCard()
 
   try {
     const res = await fetch('/api/settings')
@@ -14027,8 +14895,13 @@ function openTerminalModal(agentName) {
     paintedPane = latestPane
     term.write('\x1b[3J\x1b[2J\x1b[H' + latestPane)
   }
+  // EventSource cannot set an Authorization header. In token mode we pass the
+  // token via ?token=; in password-login (session-cookie) mode there is no
+  // token, so we open a plain URL and the browser attaches the mv_session
+  // cookie automatically -- the gate's cookie branch covers the SSE path.
   const token = localStorage.getItem('marveen-dashboard-token') || ''
-  const sse = new EventSource(`/api/agents/${encodeURIComponent(agentName)}/pane/stream?token=${encodeURIComponent(token)}`)
+  const streamBase = `/api/agents/${encodeURIComponent(agentName)}/pane/stream`
+  const sse = new EventSource(token ? `${streamBase}?token=${encodeURIComponent(token)}` : streamBase)
   sse.onmessage = (e) => {
     try {
       const msg = JSON.parse(e.data)
@@ -14550,6 +15423,8 @@ function wireFederationPage() {
   function routeFromHash() {
     let pageId = decodeURIComponent((location.hash || '').replace(/^#/, ''))
     if (!pageId) pageId = new URLSearchParams(window.location.search).get('page') || ''
+    // 'team' page is merged into 'agents' (org-chart view toggle).
+    if (pageId === 'team') { pageId = 'agents'; _agentsActiveView = 'tree' }
     if (pageId && document.getElementById(pageId + 'Page')) switchPage(pageId)
   }
   window.addEventListener('hashchange', routeFromHash)
@@ -14713,6 +15588,72 @@ function downloadMarkdown(name, content) {
     setTimeout(() => URL.revokeObjectURL(url), 1000)
   } catch (e) {
     showToast(t('common.toast.download_failed', { msg: String(e && e.message || e) }))
+  }
+}
+
+// === Research (read-only viewer for each agent's research/ folder) ===
+// Mirrors the Docs tab above, but the API groups docs by agent
+// ([{agent, docs:[{name,title,updated}]}]), so the list needs a per-agent
+// header and each item's dataset carries both agent+name for the detail
+// fetch. Reuses escapeHtml/escapeAttr/renderMarkdown/downloadMarkdown as-is.
+async function loadResearch() {
+  const listEl = document.getElementById('researchList')
+  const contentEl = document.getElementById('researchContent')
+  if (!listEl) return
+  listEl.innerHTML = '<p class="muted">' + t('research.loading') + '</p>'
+  let groups = []
+  try {
+    const res = await fetch('/api/research')
+    groups = await res.json()
+    if (!Array.isArray(groups)) groups = []
+  } catch (e) {
+    listEl.innerHTML = '<p class="muted">' + t('research.list_load_error') + ': ' + escapeHtml(String(e.message || e)) + '</p>'
+    return
+  }
+  if (!groups.length) {
+    listEl.innerHTML = '<p class="muted">' + t('research.empty_list') + '</p>'
+    if (contentEl) contentEl.innerHTML = '<p class="muted">' + t('research.empty_content') + '</p>'
+    return
+  }
+  listEl.innerHTML = groups.map(g =>
+    '<div class="docs-list-group-label">' + escapeHtml(g.agent) + '</div>' +
+    g.docs.map(d =>
+      '<a href="#" class="docs-list-item" data-agent="' + escapeAttr(g.agent) + '" data-doc="' + escapeAttr(d.name) + '">' +
+        '<span class="docs-list-title">' + escapeHtml(d.title || d.name) + '</span>' +
+        (d.updated ? '<span class="docs-list-date">' + escapeHtml(d.updated) + '</span>' : '') +
+      '</a>'
+    ).join('')
+  ).join('')
+  listEl.querySelectorAll('.docs-list-item').forEach(a => {
+    a.addEventListener('click', (e) => {
+      e.preventDefault()
+      listEl.querySelectorAll('.docs-list-item').forEach(x => x.classList.remove('active'))
+      a.classList.add('active')
+      openResearchDoc(a.dataset.agent, a.dataset.doc)
+    })
+  })
+  const first = listEl.querySelector('.docs-list-item')
+  if (first) { first.classList.add('active'); openResearchDoc(first.dataset.agent, first.dataset.doc) }
+}
+
+async function openResearchDoc(agent, name) {
+  const contentEl = document.getElementById('researchContent')
+  if (!contentEl) return
+  contentEl.innerHTML = '<p class="muted">' + t('research.loading') + '</p>'
+  try {
+    const res = await fetch('/api/research/' + encodeURIComponent(agent) + '/' + encodeURIComponent(name))
+    if (!res.ok) throw new Error('HTTP ' + res.status)
+    const doc = await res.json()
+    const content = doc.content || ''
+    contentEl.innerHTML =
+      '<div class="docs-content-toolbar">' +
+        '<button class="btn-secondary btn-compact" id="researchDownloadBtn">' + t('docs.download_btn') + '</button>' +
+      '</div>' +
+      '<div class="docs-rendered markdown-body">' + renderMarkdown(content) + '</div>'
+    const dl = document.getElementById('researchDownloadBtn')
+    if (dl) dl.addEventListener('click', () => downloadMarkdown(name, content))
+  } catch (e) {
+    contentEl.innerHTML = '<p class="muted">' + t('research.open_error') + ': ' + escapeHtml(String(e.message || e)) + '</p>'
   }
 }
 

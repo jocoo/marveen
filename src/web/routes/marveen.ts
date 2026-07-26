@@ -216,12 +216,16 @@ export async function tryHandleMarveen(ctx: RouteContext, webDir: string): Promi
   // bookmarks / external links / older dashboard builds still hit the
   // legacy `/api/marveen/avatar`. Backwards-compat is intentional and
   // open-ended (no plan to remove the legacy alias).
+  // Avatars are ~1MB each and rarely change: let browsers reuse them for an
+  // hour without a round-trip (an avatar swapped in another session shows up
+  // after at most 1h, then ETag revalidation; the swapping session itself
+  // busts via the frontend avatar epoch).
   const isAvatarGet = (path === '/api/main-agent/avatar' || path === '/api/marveen/avatar') && method === 'GET'
   if (isAvatarGet) {
     const p = findMainAgentAvatar()
-    if (p) { serveFile(req, res, p); return true }
+    if (p) { serveFile(req, res, p, { cacheSeconds: 3600 }); return true }
     const fallback = join(webDir, 'avatars', '01_robot.png')
-    if (existsSync(fallback)) { serveFile(req, res, fallback); return true }
+    if (existsSync(fallback)) { serveFile(req, res, fallback, { cacheSeconds: 3600 }); return true }
     res.writeHead(404); res.end()
     return true
   }

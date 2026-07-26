@@ -8,7 +8,7 @@ import {
 } from '../agent-config.js'
 import { readAgentTeam } from '../agent-team.js'
 import { isAgentRunning } from '../agent-process.js'
-import { json } from '../http-helpers.js'
+import { json, jsonMaybeGzip } from '../http-helpers.js'
 import { findMainAgentAvatar } from './marveen.js'
 import type { RouteContext } from './types.js'
 
@@ -59,7 +59,7 @@ function countUserTurns(fromMs: number, toMs: number = Number.POSITIVE_INFINITY)
 }
 
 export async function tryHandleOverview(ctx: RouteContext): Promise<boolean> {
-  const { res, path, method } = ctx
+  const { req, res, path, method } = ctx
 
   if (path === '/api/overview' && method === 'GET') {
     const subAgents = listAgentNames()
@@ -145,7 +145,7 @@ export async function tryHandleOverview(ctx: RouteContext): Promise<boolean> {
         avatarUrl: `/api/agents/${encodeURIComponent(a)}/avatar`,
       })
     }
-    json(res, {
+    jsonMaybeGzip(req, res, {
       agents: { total, running },
       tasksToday,
       tasksYesterday,
