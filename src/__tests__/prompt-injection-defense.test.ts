@@ -315,8 +315,11 @@ describe('/api/messages from-authentication', () => {
     expect(src).toContain("import { isKnownAgent } from '../agent-config.js'")
   })
 
-  it('calls isKnownAgent with the sanitized from field', () => {
-    expect(src).toMatch(/isKnownAgent\(\s*sanitizeAgentIdent\(from\)\s*\)/)
+  it('calls isKnownAgent with the sanitized, lowercased from field', () => {
+    // Lowercased to match the `from.trim().toLowerCase()` normalization that
+    // is actually stored/routed further down -- without it a mixed-case but
+    // registered sender (e.g. "Cuzcoo") 403s despite resolving fine on write.
+    expect(src).toMatch(/isKnownAgent\(\s*sanitizeAgentIdent\(from\)\.toLowerCase\(\)\s*\)/)
   })
 
   it('rejects unknown agents with 403', () => {
@@ -335,11 +338,12 @@ describe('/api/messages from-authentication', () => {
   })
 
   it('uses sanitizeAgentIdent for normalization (same as router)', () => {
-    // Security: the from-auth check must use sanitizeAgentIdent, the same
-    // normalization the router uses for CHANNEL_COORDINATOR_AGENTS.has(). Using
-    // a different normalizer (e.g. trim()) would create an asymmetry a bypass
-    // could exploit.
-    expect(src).toContain('isKnownAgent(sanitizeAgentIdent(from))')
+    // Security: the from-auth check must be built on sanitizeAgentIdent, the
+    // same normalization the router uses for CHANNEL_COORDINATOR_AGENTS.has().
+    // Using a different base normalizer (e.g. trim() alone) would create an
+    // asymmetry a bypass could exploit. The added .toLowerCase() only folds
+    // case on top -- it does not replace sanitizeAgentIdent as the base.
+    expect(src).toContain('isKnownAgent(sanitizeAgentIdent(from).toLowerCase())')
   })
 })
 

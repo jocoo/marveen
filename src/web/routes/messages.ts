@@ -65,7 +65,10 @@ export async function tryHandleMessages(ctx: RouteContext): Promise<boolean> {
     // filesystem (agents/<id>/ directory, or MAIN_AGENT_ID). This is not
     // impersonation-proof between fleet agents (they share the same token) but
     // it closes the "unknown sender" injection path without per-agent secrets.
-    if (!isKnownAgent(sanitizeAgentIdent(from))) {
+    // Lowercased to match `normalizedFrom` below -- agent dirs are lowercase,
+    // so a mixed-case but otherwise valid sender (e.g. "Cuzcoo") must resolve
+    // the same as "cuzcoo", not 403 (jocoo/marveen local patch, #217).
+    if (!isKnownAgent(sanitizeAgentIdent(from).toLowerCase())) {
       logger.warn({ from: from.trim(), to: to.trim() }, 'Rejected /api/messages POST from unregistered agent')
       json(res, { error: `unknown agent '${from.trim()}' -- from must be a registered fleet agent id` }, 403)
       return true
