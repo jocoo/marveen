@@ -1,23 +1,20 @@
-# 💭 Dream Engine — 2026-07-25 02:07 (késve, ténylegesen 09:40-kor futott)
-
-## ⚠️ Hibák
-A scheduled-task sor csúszott/backlogolt éjszaka -- ez a futás 02:07 helyett csak 09:40-kor indult (task_runs: `fired_late`). A dashboard service maga folyamatosan futott, nem esett ki; Jocoo rákérdezett Telegramon ("Még mindig fut?"), jeleztem neki a csúszást. A reggeli napindító emiatt ma később megy ki a szokásosnál.
+# 💭 Dream Engine — 2026-07-27 02:07
 
 ## 💡 Skill-javaslatok
-Nincs új javaslat. Az elmúlt 24h szinte teljes egészében rutin karbantartás volt (4x kanban-audit, 1x upstream sync -- mindkettő meglévő skill alá esett). Egyetlen sub-agent (Kronk, Yzma, Chicha, Mata, Tipo) sem írt memóriát vagy naplót az elmúlt napban -- úgy tűnik idle voltak (a tmux sessionjeik ma reggel 09:30 körül újra létrejöttek, valószínűleg egy flotta-szintű restart miatt).
+Nincs új javaslat. Az elmúlt 24h túlnyomó része egyetlen nagy munkára (2026-07-26 upstream sync sync/main-v1.23.2-re + a rá épülő #217 lokál patch) koncentrálódott, Cuzcoo-nál futva. A menet közben felmerült két konkrét mintázatot (git stash veszélye félkész merge alatt, upstream security-check lokál patchelésekor a literal-string-tesztek átvizsgálása) még élőben, a munka közben skillbe öntötte (marveen-upstream-sync/Buktatók, 2x patch-elve ugyanaznap). Sub-agentek (Kronk, Yzma, Chicha, Mata, Tipo) egyike sem írt memóriát vagy naplót az elmúlt napban -- idle voltak.
 
 ## 🧹 Memória-egészség
-558 / 558 vektorizált (1 db backfill-lel pótolva). 5 db antikvált hot-tier memória (rutinszerű "skip-skill" bejegyzések 2026-07-17/18-ról, 7+ napja nem hivatkozva) cold-tierbe mozgatva. 0 pontos duplikátum a nem-cold rétegekben.
+569 / 569 vektorizált (1 db backfill-lel pótolva). 7 db antikvált hot-tier memória (2026-07-18/19-i skip-skill és crochet-export bejegyzések, 7+ napja nem hivatkozva) cold-tierbe mozgatva. 0 pontos duplikátum a nem-cold rétegekben.
 
 ## 🎯 Top-3 mai javaslat
-1. Kanban archiválási backlog: 7 db 7+ napos done kártya (#194/#195/#197/#198/#199/#200/#201) vár jóváhagyásra, 4 egymást követő audit-kör (07-24: 08/12/16/20h) óta válasz nélkül -- egyetlen "mehet mind" gyorsan feloldja.
-2. Marveen_Env #209 (Dashboard model-dropdown: Sonnet 5 hiányzik): a tegnapi upstream sync (v1.23.1) már tartalmazza a Sonnet 5 modell-választó feature-t -- a kártya valószínűleg zárható, csak ellenőrzés kell.
-3. Scouts #142/#143 (raktárkulcs átvétele + den-inventory lista): mindkettő high priority, 07-17 óta mozdulatlan (immár 8 napja) -- a legrégebb óta stagnáló high-priority tételek a táblán, fizikai jelenlétet igényelnek Jocoo-tól.
+1. Marveen_Env #203 ("auto-restart-runner macOS launchctl-t hív Linuxon, ENOENT"): valószínűleg már megoldódott a tegnapi upstream sync-ben behozott `fix(auto-restart): restart the main session on hosts without launchd (#713)` commit-tal -- gyors ellenőrzés + zárás.
+2. Marveen_Env #209 ("Sonnet 5 hiányzik a model-dropdown-ból"): szintén a nemrégi upstream sync-ekkel (v1.23.1/v1.23.2) már lefedettnek tűnik -- ellenőrzés + zárás, ha stimmel.
+3. Scouts #142 (raktárkulcs átvétele) és #143 (den-inventory lista): mindkettő high priority és napok óta mozdulatlan -- fizikai jelenlétet igénylő, legrégebb óta stagnáló tételek a táblán.
 
 ## 🌐 External opportunity
-Skip -- heti limit még nem telt le (6.3 napja futott, ~0.7 nap van hátra a 7 napos küszöbig).
+[rohitg00/awesome-claude-code-toolkit](https://github.com/rohitg00/awesome-claude-code-toolkit) -- 135 agent, 35 skill, 42 command, 176+ plugin, 20 hook egy csomagban kifejezetten Claude Code fejlesztési flották kezelésére; releváns lehet a Marveen/Cuzcoo multi-agent fleet (Kronk/Yzma/Chicha/Mata/Tipo) menedzsment-mintáihoz és hook-ötletekhez.
 
 ## 🛠 Skill-flotta health
-Nincs változás a korábbi jelentéshez képest: ugyanaz a 7 nem-pinned skill mutat 30+ napos érintetlen mtime-ot (ai-fleet-project-execution, github-pr-rebase-merge, handoff, marveen-dashboard-deploy, retrospective, skill-management, stop-and-reassess-3-iter). Nem javaslok törlést -- a `skill_usage` tábla üres, csak fájl-időbélyeg proxy áll rendelkezésre.
+8 nem-pinned skill mutat 30+ napos érintetlen mtime-ot: skill-management, retrospective, handoff, github-pr-rebase-merge, ai-fleet-project-execution (59 nap), skill-factory (58 nap), marveen-dashboard-deploy (49 nap), stop-and-reassess-3-iter (38 nap). Nem javaslok törlést -- a `skill_usage` tábla továbbra is üres (nincs valódi használat-tracking), csak fájl-időbélyeg proxy áll rendelkezésre, ez önmagában nem elég megbízható a törléshez.
 
-*Marveen, 09:44 -- most már alszom én is (bár épp csak felébredtem).*
+*Marveen, 02:19 -- most már alszom én is.*
