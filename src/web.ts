@@ -7,6 +7,7 @@ import { PROJECT_ROOT, WEB_HOST, DASHBOARD_PUBLIC_URL, DASHBOARD_ALLOWED_ORIGINS
 import { loadOrCreateDashboardToken } from './web/dashboard-auth.js'
 import { resolveAuth, requiresAuth, isFederationWireEndpoint, type AuthResult } from './web/auth-gate.js'
 import { sweepExpiredSessions } from './web/auth-sessions.js'
+import { sweepExpiredDeviceKeys } from './web/auth-device-keys.js'
 import { isBlockedCrossOriginWrite, originMatchesServedHost } from './web/csrf-origin.js'
 import { json } from './web/http-helpers.js'
 import { detectLanIp } from './web/network-info.js'
@@ -31,6 +32,7 @@ import { collectTokenUsage } from './web/token-usage.js'
 import { logger } from './logger.js'
 import { markOrphanedTranscribeJobsFailed, createAgentMessage } from './db.js'
 import { tryHandleAuth } from './web/routes/auth.js'
+import { tryHandleSecurity } from './web/routes/security.js'
 import { tryHandleProfiles } from './web/routes/profiles.js'
 import { tryHandleMessages } from './web/routes/messages.js'
 import { tryHandleFederation } from './web/routes/federation.js'
@@ -154,6 +156,7 @@ export function startWebServer(port = 3420): http.Server {
     const fedPeerForCtx: string | null = auth.kind === 'federation' ? auth.peer : null
     const ctxAuth =
       auth.kind === 'token' ? { kind: 'token' as const }
+      : auth.kind === 'device' ? { kind: 'device' as const, device: auth.device }
       : auth.kind === 'session' ? { kind: 'session' as const, user: auth.user }
       : auth.kind === 'federation' ? { kind: 'federation' as const, peer: auth.peer }
       : undefined
@@ -171,6 +174,7 @@ export function startWebServer(port = 3420): http.Server {
       const routeCtx: RouteContext = { req, res, path, method, url, fedPeer: fedPeerForCtx, auth: ctxAuth }
 
       if (await tryHandleAuth(routeCtx)) return
+      if (await tryHandleSecurity(routeCtx)) return
       if (await tryHandleProfiles(routeCtx)) return
       if (await tryHandleMessages(routeCtx)) return
       if (await tryHandleFederation(routeCtx)) return
@@ -408,6 +412,8 @@ export function startWebServer(port = 3420): http.Server {
     try {
       const swept = sweepExpiredSessions()
       if (swept > 0) logger.info({ swept }, 'Expired auth sessions swept')
+      const sweptKeys = sweepExpiredDeviceKeys()
+      if (sweptKeys > 0) logger.info({ swept: sweptKeys }, 'Expired device keys swept')
     } catch (err) {
       logger.warn({ err }, 'Auth session sweep failed')
     }

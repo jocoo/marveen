@@ -417,6 +417,7 @@ function switchPage(pageId) {
   if (!document.getElementById('settingsPage').hidden && pageId !== 'settings' && !confirmSettingsLeave()) return
   pages.forEach((p) => (p.hidden = p.id !== pageId + 'Page'))
   navLinks.forEach((l) => l.classList.toggle('active', l.dataset.page === pageId))
+  openSidebarGroupForPage(pageId)
   // Kanban needs full-width layout (overrides main's max-width: 1200px)
   document.querySelector('main').classList.toggle('kanban-active', pageId === 'kanban')
   // Activity page runs a live poll; stop it whenever we navigate away.
@@ -478,6 +479,82 @@ navLinks.forEach((link) => {
     else location.hash = pageId
     setSidebarOpen(false) // close the drawer after navigating on mobile
   })
+})
+
+// === Collapsible sidebar groups ===
+// Open/closed state lives in localStorage (marveen.sidebarGroups) as a JSON
+// array of open group keys. Missing or corrupt state means everything starts
+// collapsed -- that is the designed default, not an error.
+const SIDEBAR_GROUPS_LS_KEY = 'marveen.sidebarGroups'
+// Declarative single source of truth for the group -> pages mapping. The markup
+// order is only the default snapshot: at boot the static links are re-parented
+// into their group containers per this map, so regrouping a page (say, moving
+// naplo under system) or relabeling a group is a one-line change right here.
+const SIDEBAR_GROUPS = [
+  { key: 'team',        labelKey: 'nav.group.team',        pages: ['agents', 'activity', 'messages', 'tasks', 'bgTasks'] },
+  { key: 'knowledge',   labelKey: 'nav.group.knowledge',   pages: ['memories', 'skills', 'research', 'ideas'] },
+  { key: 'stats',       labelKey: 'nav.group.stats',       pages: ['costs', 'tokenUsage'] },
+  { key: 'system',      labelKey: 'nav.group.system',      pages: ['status', 'naplo', 'updates', 'settings', 'vault'] },
+  { key: 'connections', labelKey: 'nav.group.connections', pages: ['connectors', 'federation', 'migrate'] },
+]
+const sidebarGroupEls = document.querySelectorAll('.sb-group[data-group]')
+// data-page -> group key, derived from the map (not the DOM) so the map wins.
+const PAGE_SIDEBAR_GROUP = {}
+SIDEBAR_GROUPS.forEach((def) => def.pages.forEach((p) => { PAGE_SIDEBAR_GROUP[p] = def.key }))
+// Re-parent the 23 static links to match the map. Moving an existing DOM node
+// does not invalidate the navLinks refs captured by querySelectorAll at boot.
+SIDEBAR_GROUPS.forEach((def) => {
+  const group = document.querySelector(`.sb-group[data-group="${def.key}"]`)
+  if (!group) return
+  const label = group.querySelector('.sb-group-label')
+  if (label) label.dataset.i18n = def.labelKey
+  const items = group.querySelector('.sb-group-items')
+  if (!items) return
+  def.pages.forEach((p) => {
+    const link = document.querySelector(`.sb-link[data-page="${p}"]`)
+    if (link) items.appendChild(link)
+  })
+})
+
+function loadSidebarGroupState() {
+  try {
+    const arr = JSON.parse(localStorage.getItem(SIDEBAR_GROUPS_LS_KEY))
+    return Array.isArray(arr) ? arr.filter((k) => typeof k === 'string') : []
+  } catch { return [] }
+}
+
+function setSidebarGroupOpen(groupEl, open, persist = true) {
+  groupEl.classList.toggle('open', open)
+  const btn = groupEl.querySelector('.sb-group-header')
+  if (btn) btn.setAttribute('aria-expanded', open ? 'true' : 'false')
+  if (persist) {
+    const key = groupEl.dataset.group
+    const state = loadSidebarGroupState().filter((k) => k !== key)
+    if (open) state.push(key)
+    try { localStorage.setItem(SIDEBAR_GROUPS_LS_KEY, JSON.stringify(state)) } catch {}
+  }
+}
+
+// Called from switchPage: the active page's group must always be visible so the
+// "where am I" highlight is never hidden inside a collapsed group.
+function openSidebarGroupForPage(pageId) {
+  const key = PAGE_SIDEBAR_GROUP[pageId]
+  if (!key) return
+  sidebarGroupEls.forEach((g) => {
+    // persist=false: only user clicks may be remembered. Persisting the
+    // auto-open would let everyday navigation accumulate all 5 groups as
+    // saved-open and quietly bring back the flat 23-item menu.
+    if (g.dataset.group === key && !g.classList.contains('open')) setSidebarGroupOpen(g, true, false)
+  })
+}
+
+{
+  const openKeys = loadSidebarGroupState()
+  sidebarGroupEls.forEach((g) => setSidebarGroupOpen(g, openKeys.includes(g.dataset.group), false))
+}
+sidebarGroupEls.forEach((g) => {
+  const btn = g.querySelector('.sb-group-header')
+  if (btn) btn.addEventListener('click', () => setSidebarGroupOpen(g, !g.classList.contains('open')))
 })
 
 
@@ -10924,7 +11001,22 @@ function chatAvatarHtml(agentName, size = 32) {
   return `<img class="chat-avatar" src="${src}" width="${size}" height="${size}" alt="${escapeHtml(agentName)}" data-agent-name="${escapeHtml(agentName)}" onerror="chatImgError(this)">`
 }
 
+// Guard against the boot race: the Messages page can be opened before the
+// initial /api/marveen fetch resolves window._marveen. Until it does,
+// mainAgentId() returns the literal 'marveen' FALLBACK, which is a real agent
+// id on no install here -- composing to it creates a phantom "marveen" thread
+// that sits pending forever and shows up as a duplicate of the true main agent
+// (torpapa). Resolve _marveen before rendering any chat target.
+async function ensureMarveenLoaded() {
+  if (window._marveen?.agentId) return
+  try {
+    const r = await fetch('/api/marveen')
+    if (r.ok) window._marveen = { ...(window._marveen || {}), ...(await r.json()) }
+  } catch { /* sidebar falls back to the literal id -- best effort */ }
+}
+
 async function loadMessagesPage() {
+  await ensureMarveenLoaded()
   await loadChatAgentList()
 }
 
@@ -11005,8 +11097,12 @@ async function loadChatAgentList() {
     for (const t of threads) {
       if (t.agent) threadIndex.set(t.agent, { lastMsg: t.lastMessage, count: t.count || 0 })
     }
-    // Also include thread agents not in fleet (e.g. the owner's own direct msgs)
+    // Also include thread agents not in fleet (e.g. the owner's own direct msgs).
+    // Suppress the literal 'marveen' fallback id when it is NOT the real main
+    // agent: a stale phantom thread (from the boot-race bug) would otherwise
+    // render as a duplicate of the true main agent.
     for (const t of threads) {
+      if (t.agent === 'marveen' && mainAgentId() !== 'marveen') continue
       if (t.agent && !fleetNames.includes(t.agent) && !CHAT_SYSTEM_AGENTS.has(t.agent)) {
         fleetNames.push(t.agent)
       }
@@ -12021,11 +12117,16 @@ function renderOnboarding(s) {
     el.classList.toggle('active', n === step)
     el.classList.toggle('done', n < step)
   })
+  // The steps build on each other and the system only comes alive at the end
+  // of step 4 -- say so, or a fresh installer reads step 2's "saved" as "done"
+  // and every later "bot token not found" as a failure (BK bootcamp, 07-28).
+  const flowNote = document.getElementById('onbFlowNote')
+  if (flowNote) flowNote.textContent = step === 4 ? t('onboarding.flow_note_last') : t('onboarding.flow_note')
   const body = document.getElementById('onboardingBody')
   if (step === 1) body.innerHTML = onbIdentityHtml(s)
   else if (step === 2) body.innerHTML = onbStep1Html(s)
   else if (step === 3) body.innerHTML = onbStep2Html()
-  else body.innerHTML = onbStep3Html()
+  else body.innerHTML = onbStep3Html(s)
   wireOnboarding(step)
 }
 function onbMsg(text, isErr) {
@@ -12063,8 +12164,15 @@ function onbStep2Html() {
     + `<button class="btn-primary btn-compact" id="onbBotBtn">${escapeHtml(t('onboarding.step2.save_btn'))}</button>`
     + `<div id="onbMsg" class="onb-msg"></div>`
 }
-function onbStep3Html() {
+function onbStep3Html(s) {
+  // Pairing needs the channels session up (the wizard restarted it after the
+  // bot-token save) -- show its state so a not-yet-up service reads as
+  // "starting", not as the user's failure.
+  const svcLine = s && s.agentsRunning
+    ? `<p class="onb-ok-line">${escapeHtml(t('onboarding.step3.svc_up'))}</p>`
+    : `<p class="onb-hint">${escapeHtml(t('onboarding.step3.svc_starting'))}</p>`
   return `<p>${escapeHtml(t('onboarding.step3.desc'))}</p>`
+    + svcLine
     + `<ol class="onb-list"><li>${escapeHtml(t('onboarding.step3.li1'))}</li><li>${escapeHtml(t('onboarding.step3.li2'))}</li></ol>`
     + `<div id="onbPending" class="onb-pending"></div>`
     + `<button class="btn-secondary btn-compact" id="onbRefreshBtn">${escapeHtml(t('onboarding.step3.refresh_btn'))}</button>`
@@ -12082,6 +12190,14 @@ function wireOnboarding(step) {
         const res = await fetch('/api/onboarding/identity', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ agentName, ownerName }) })
         const d = await res.json().catch(() => ({}))
         if (!res.ok) { idBtn.disabled = false; onbMsg(d.error || t('onboarding.error'), true); return }
+        // The name is live in the .env now -- repaint the chrome from
+        // /api/marveen so the sidebar/title reflect it immediately, and
+        // surface the automatic channels restart (same pattern as the
+        // claude-auth step) instead of silently advancing.
+        if (typeof initSidebarBrand === 'function') initSidebarBrand()
+        if (d.restartError) { idBtn.disabled = false; onbMsg(t('onboarding.identity.saved_restart_failed'), true); setTimeout(refreshOnboarding, 6000); return }
+        if (d.restarted) { onbMsg(t('onboarding.identity.saved_restarted')); setTimeout(refreshOnboarding, 2500); return }
+        if (d.restartNeeded) { onbMsg(t('onboarding.identity.saved_restart_needed')); await refreshOnboarding(); return }
         onbMsg(t('onboarding.identity.saved'))
         await refreshOnboarding()
       } catch (e) { idBtn.disabled = false; onbMsg((e && e.message) || t('onboarding.error'), true) }
@@ -12098,6 +12214,12 @@ function wireOnboarding(step) {
         const res = await fetch('/api/onboarding/claude-auth', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ token }) })
         const d = await res.json().catch(() => ({}))
         if (!res.ok) { authBtn.disabled = false; onbMsg(d.error || t('onboarding.error'), true); return }
+        // Fresh-install path: the server restarts the (previously
+        // unauthenticated) channels session right after the first auth save --
+        // surface that, and on failure show the manual restart step instead of
+        // silently advancing.
+        if (d.restartError) { authBtn.disabled = false; onbMsg(t('onboarding.step1.saved_restart_failed'), true); setTimeout(refreshOnboarding, 6000); return }
+        if (d.restarted) { onbMsg(t('onboarding.step1.saved_restarted')); setTimeout(refreshOnboarding, 2500); return }
         onbMsg(d.verified ? t('onboarding.step1.saved_verified') : t('onboarding.step1.saved_unverified'))
         await refreshOnboarding()
       } catch (e) { authBtn.disabled = false; onbMsg((e && e.message) || t('onboarding.error'), true) }
@@ -12123,8 +12245,11 @@ function wireOnboarding(step) {
         const res = await fetch(`/api/agents/${encodeURIComponent(mainAgentId())}/channels/telegram`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ botToken }) })
         const d = await res.json().catch(() => ({}))
         if (!res.ok) { botBtn.disabled = false; onbMsg(d.error || t('onboarding.error'), true); return }
-        onbMsg(t('onboarding.step2.saved'))
-        setTimeout(refreshOnboarding, 2000)
+        // The server restarts the channels session so the new bot token goes
+        // live -- say so, and give the respawn a beat before advancing so the
+        // pairing step starts against the restarted service.
+        onbMsg(d.restarted ? t('onboarding.step2.saved_restarted') : t('onboarding.step2.saved'))
+        setTimeout(refreshOnboarding, d.restarted ? 4000 : 2000)
       } catch (e) { botBtn.disabled = false; onbMsg((e && e.message) || t('onboarding.error'), true) }
     })
   } else if (step === 4) {
@@ -12934,7 +13059,7 @@ window.addEventListener('beforeunload', (e) => {
 // entry never requires a frontend change just to render a sane heading.
 function settingsModuleLabel(mod) {
   const key = `settings.module.${mod}`
-  const known = { kanban: true, system: true, heartbeat: true, audit: true, ideabox: true, channels: true }
+  const known = { kanban: true, system: true, heartbeat: true, audit: true, ideabox: true, channels: true, security: true, autonomy: true }
   return known[mod] ? t(key) : (mod.charAt(0).toUpperCase() + mod.slice(1))
 }
 
@@ -12990,9 +13115,188 @@ async function renderAuthCard() {
   if (!body) return
   const status = await fetchAuthStatus()
   if (!status) { body.innerHTML = `<p class="auth-muted">${t('auth.card.unavailable')}</p>`; return }
-  if (status.setup_required) { renderCreateLoginForm(body); return }
-  if (status.method === 'session') { renderSessionPanel(body, status); return }
-  renderTokenModePanel(body)
+  if (status.setup_required) { renderCreateLoginForm(body) }
+  else if (status.method === 'session') { renderSessionPanel(body, status) }
+  else renderTokenModePanel(body)
+  // Device keys are managed by token/session operators only (a device key
+  // itself gets 403 from the management endpoints, so don't render the panel).
+  if (status.method === 'token' || status.method === 'session') {
+    renderDeviceKeysSection(body)
+    renderBridgeEnrollSection(body)
+  }
+}
+
+// === Bridge pairing (AUTHPLAN1 #2) ===
+// Paste the public-key line shown by the Bridge app -> one confirm -> the
+// server writes the restricted SSH entry + mints a per-device key -> the
+// returned bundle (shown once, copyable) goes back into the Bridge.
+
+function renderBridgeEnrollSection(body) {
+  const wrap = document.createElement('div')
+  wrap.className = 'auth-device-keys auth-bridge-enroll'
+  wrap.id = 'authBridgeEnroll'
+  wrap.innerHTML =
+    `<div class="auth-sessions-title">${t('auth.bridge.title')}</div>` +
+    `<p class="auth-muted">${t('auth.bridge.desc')}</p>` +
+    `<div class="auth-form">` +
+      `<input id="authBridgeKeyLine" type="text" autocapitalize="off" spellcheck="false" placeholder="${t('auth.bridge.key_placeholder')}">` +
+      `<input id="authBridgeName" type="text" autocapitalize="off" spellcheck="false" maxlength="64" placeholder="${t('auth.bridge.name_placeholder')}">` +
+      `<input id="authBridgeHost" type="text" autocapitalize="off" spellcheck="false" maxlength="253" placeholder="${t('auth.bridge.host_placeholder')}">` +
+      `<button class="btn-secondary" id="authBridgeEnrollBtn">${t('auth.bridge.enroll')}</button>` +
+      `<div class="auth-form-msg" id="authBridgeMsg"></div>` +
+      `<div id="authBridgeBundle" hidden></div>` +
+    `</div>`
+  body.appendChild(wrap)
+  document.getElementById('authBridgeEnrollBtn').addEventListener('click', bridgeEnrollFromUi)
+}
+
+async function bridgeEnrollFromUi() {
+  const msg = document.getElementById('authBridgeMsg')
+  const out = document.getElementById('authBridgeBundle')
+  const keyLine = (document.getElementById('authBridgeKeyLine').value || '').trim()
+  const name = (document.getElementById('authBridgeName').value || '').trim()
+  const hostOverride = (document.getElementById('authBridgeHost').value || '').trim()
+  msg.className = 'auth-form-msg'
+  msg.textContent = ''
+  out.hidden = true
+  if (!keyLine || !name) { msg.classList.add('err'); msg.textContent = t('auth.bridge.err_empty'); return }
+  // The confirm step: pairing grants the device SSH-tunnel + dashboard access.
+  if (!confirm(t('auth.bridge.confirm', { name }))) return
+  msg.textContent = t('auth.bridge.working')
+  try {
+    const r = await fetch('/api/security/bridge-enroll', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(hostOverride ? { key_line: keyLine, name, host: hostOverride } : { key_line: keyLine, name }),
+    })
+    const data = await r.json().catch(() => ({}))
+    if (!r.ok) { msg.classList.add('err'); msg.textContent = data.error || t('auth.card.err_generic'); return }
+    msg.classList.add('ok')
+    msg.textContent = (data.action === 'replaced' ? t('auth.bridge.repaired') : t('auth.bridge.paired')) +
+      (data.warnings && data.warnings.length ? ` (${data.warnings.join('; ')})` : '')
+    document.getElementById('authBridgeKeyLine').value = ''
+    document.getElementById('authBridgeName').value = ''
+    document.getElementById('authBridgeHost').value = ''
+    out.hidden = false
+    out.innerHTML =
+      `<p class="auth-muted">${t('auth.bridge.bundle_hint', { host: escapeHtml(data.host || '') })}</p>` +
+      `<div class="auth-form auth-device-minted-row">` +
+        `<input id="authBridgeBundleVal" type="text" readonly value="${escapeHtml(data.bundle)}" onclick="this.select()">` +
+        `<button class="btn-secondary btn-compact" id="authBridgeCopyBtn">${t('auth.devices.copy')}</button>` +
+      `</div>`
+    document.getElementById('authBridgeCopyBtn').addEventListener('click', async () => {
+      try {
+        await navigator.clipboard.writeText(data.bundle)
+        document.getElementById('authBridgeCopyBtn').textContent = t('auth.devices.copied')
+      } catch { document.getElementById('authBridgeBundleVal').select() }
+    })
+    refreshDeviceKeyList()
+  } catch { msg.classList.add('err'); msg.textContent = t('auth.login.err_network') }
+}
+
+// === Per-device keys (mint/list/revoke) ===
+// A device key is a revocable per-device credential (Bridge, phone). The raw
+// key is displayed exactly once, right after minting.
+
+function renderDeviceKeysSection(body) {
+  const wrap = document.createElement('div')
+  wrap.className = 'auth-device-keys'
+  wrap.id = 'authDeviceKeys'
+  wrap.innerHTML =
+    `<div class="auth-sessions-title">${t('auth.devices.title')}</div>` +
+    `<p class="auth-muted">${t('auth.devices.desc')}</p>` +
+    `<div class="auth-form-msg err auth-device-warn" id="authDeviceKeyWarn" hidden></div>` +
+    `<div id="authDeviceKeyList"></div>` +
+    `<div class="auth-form auth-device-mint">` +
+      `<input id="authDevName" type="text" autocapitalize="off" spellcheck="false" maxlength="64" placeholder="${t('auth.devices.name_placeholder')}">` +
+      `<input id="authDevExpiry" type="number" min="1" max="3650" placeholder="${t('auth.devices.expiry_placeholder')}">` +
+      `<button class="btn-secondary" id="authDevMintBtn">${t('auth.devices.mint')}</button>` +
+      `<div class="auth-form-msg" id="authDevMsg"></div>` +
+      `<div id="authDevMinted" hidden></div>` +
+    `</div>`
+  body.appendChild(wrap)
+  document.getElementById('authDevMintBtn').addEventListener('click', mintDeviceKey)
+  refreshDeviceKeyList()
+}
+
+async function refreshDeviceKeyList() {
+  const el = document.getElementById('authDeviceKeyList')
+  if (!el) return
+  try {
+    const r = await fetch('/api/auth/device-keys')
+    if (!r.ok) { el.innerHTML = ''; return }
+    const { keys } = await r.json()
+    if (!keys || !keys.length) { el.innerHTML = `<p class="auth-muted">${t('auth.devices.empty')}</p>`; return }
+    el.innerHTML = keys.map((k) => {
+      const created = new Date(k.createdAt * 1000).toLocaleDateString()
+      const lastUsed = k.lastUsedAt ? new Date(k.lastUsedAt * 1000).toLocaleString() : t('auth.devices.never_used')
+      const expires = k.expiresAt ? ` &middot; ${t('auth.devices.expires', { date: new Date(k.expiresAt * 1000).toLocaleDateString() })}` : ''
+      const bridge = k.installId ? ` <span class="auth-device-bridge-badge">${t('auth.devices.bridge_badge')}</span>` : ''
+      return `<div class="auth-session-row auth-device-row" data-key-id="${k.id}">` +
+        `<span class="auth-device-name">${escapeHtml(k.name)}${bridge}</span>` +
+        `<span class="auth-device-meta">${created} &middot; ${t('auth.devices.last_used', { date: lastUsed })}${expires}</span>` +
+        `<button class="btn-secondary btn-compact auth-device-revoke" data-key-id="${k.id}">${t('auth.devices.revoke')}</button>` +
+      `</div>`
+    }).join('')
+    el.querySelectorAll('.auth-device-revoke').forEach((btn) => {
+      btn.addEventListener('click', async () => {
+        if (!confirm(t('auth.devices.revoke_confirm'))) return
+        // A Bridge-paired revoke means BOTH halves (dashboard key + ssh line).
+        // The key is dead either way, but ssh_removed:false means the
+        // authorized_keys line survived (fs error) and the device can still
+        // open the tunnel -- the ONE outcome the UI must never hide.
+        const warnBefore = document.getElementById('authDeviceKeyWarn')
+        if (warnBefore) warnBefore.hidden = true
+        let sshWarn = false
+        try {
+          const r = await fetch(`/api/auth/device-keys/${btn.dataset.keyId}`, { method: 'DELETE' })
+          const data = await r.json().catch(() => ({}))
+          if (r.ok && data.ssh_removed === false) sshWarn = true
+        } catch { /* ignore -- the list refresh below shows the real state */ }
+        await refreshDeviceKeyList()
+        const warnEl = document.getElementById('authDeviceKeyWarn')
+        if (warnEl && sshWarn) {
+          warnEl.hidden = false
+          warnEl.textContent = t('auth.devices.revoke_ssh_warning')
+        }
+      })
+    })
+  } catch { el.innerHTML = '' }
+}
+
+async function mintDeviceKey() {
+  const msg = document.getElementById('authDevMsg')
+  const minted = document.getElementById('authDevMinted')
+  const name = (document.getElementById('authDevName').value || '').trim()
+  const expiryRaw = document.getElementById('authDevExpiry').value
+  msg.className = 'auth-form-msg'
+  minted.hidden = true
+  if (!name) { msg.classList.add('err'); msg.textContent = t('auth.devices.err_name'); return }
+  const payload = { name }
+  if (expiryRaw) payload.expires_in_days = Number(expiryRaw)
+  try {
+    const r = await fetch('/api/auth/device-keys', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    })
+    const data = await r.json().catch(() => ({}))
+    if (!r.ok) { msg.classList.add('err'); msg.textContent = data.error || t('auth.card.err_generic'); return }
+    document.getElementById('authDevName').value = ''
+    document.getElementById('authDevExpiry').value = ''
+    minted.hidden = false
+    minted.innerHTML =
+      `<p class="auth-muted">${t('auth.devices.minted_hint')}</p>` +
+      `<div class="auth-form auth-device-minted-row">` +
+        `<input id="authDevMintedKey" type="text" readonly value="${escapeHtml(data.key)}" onclick="this.select()">` +
+        `<button class="btn-secondary btn-compact" id="authDevCopyBtn">${t('auth.devices.copy')}</button>` +
+      `</div>`
+    document.getElementById('authDevCopyBtn').addEventListener('click', async () => {
+      try {
+        await navigator.clipboard.writeText(data.key)
+        document.getElementById('authDevCopyBtn').textContent = t('auth.devices.copied')
+      } catch { document.getElementById('authDevMintedKey').select() }
+    })
+    refreshDeviceKeyList()
+  } catch { msg.classList.add('err'); msg.textContent = t('auth.login.err_network') }
 }
 
 function renderCreateLoginForm(body) {
@@ -13114,6 +13418,8 @@ function wireAuthBanner() {
     banner.hidden = true
   })
   if (go) go.addEventListener('click', () => {
+    // Land on the Security tab, where the auth card lives now.
+    try { localStorage.setItem(SETTINGS_ACTIVE_TAB_KEY, 'security') } catch { /* storage blocked */ }
     if (typeof switchPage === 'function') switchPage('settings')
     const link = document.querySelector('.sb-link[data-page="settings"]')
     if (link) { document.querySelectorAll('.sb-link').forEach((l) => l.classList.remove('active')); link.classList.add('active') }
@@ -13130,6 +13436,15 @@ async function loadSettings() {
   const tabNav = document.getElementById('settingsTabNav')
   const tabPanels = document.getElementById('settingsTabPanels')
   if (!tabNav || !tabPanels) return
+
+  // Park the auth card back outside the panels before wiping them: a previous
+  // loadSettings run moved it INTO the Security panel, and clearing
+  // tabPanels.innerHTML with the card still inside would destroy the node.
+  const parkedAuthCard = document.getElementById('authCard')
+  if (parkedAuthCard) {
+    parkedAuthCard.hidden = true
+    tabNav.parentElement.insertBefore(parkedAuthCard, tabNav)
+  }
 
   tabNav.innerHTML = `<span style="color:var(--text-muted);font-size:13px;padding:12px 0;display:inline-block">${t('settings.loading')}</span>`
   tabPanels.innerHTML = ''
@@ -13154,10 +13469,19 @@ async function loadSettings() {
 
     if (byModule.size === 0) {
       tabPanels.innerHTML = `<p style="padding:24px;color:var(--text-muted);font-size:13px">${t('settings.empty')}</p>`
+      // No tabs to host the Security panel: fall back to showing the auth card
+      // in its static spot above the (empty) tab area.
+      const orphanAuthCard = document.getElementById('authCard')
+      if (orphanAuthCard) orphanAuthCard.hidden = false
       return
     }
 
-    const allModules = [...byModule.keys(), 'autonomy']
+    // Registry keys declared with module:'security' render inside the synthetic
+    // Security tab (below the auth card) instead of getting their own tab.
+    const securityDefs = byModule.get('security') ?? []
+    byModule.delete('security')
+
+    const allModules = [...byModule.keys(), 'security', 'autonomy']
     const savedTab = localStorage.getItem(SETTINGS_ACTIVE_TAB_KEY) || allModules[0]
     const activeTab = allModules.includes(savedTab) ? savedTab : allModules[0]
 
@@ -13181,6 +13505,40 @@ async function loadSettings() {
         group.appendChild(buildSettingRow(def))
       }
       panel.appendChild(group)
+      tabPanels.appendChild(panel)
+    }
+
+    // Security tab (synthetic, like autonomy: exists even with zero registry
+    // entries). Hosts the auth card -- browser login, password change, device
+    // keys -- plus any module:'security' registry keys.
+    {
+      const mod = 'security'
+      const btn = document.createElement('button')
+      btn.className = 'tab-btn' + (mod === activeTab ? ' active' : '')
+      btn.dataset.tab = mod
+      btn.textContent = settingsModuleLabel(mod)
+      btn.addEventListener('click', () => activateSettingsTab(mod))
+      tabNav.appendChild(btn)
+
+      const panel = document.createElement('div')
+      panel.className = 'tab-panel'
+      panel.id = `settings-panel-${mod}`
+      panel.hidden = mod !== activeTab
+
+      const authCard = document.getElementById('authCard')
+      if (authCard) {
+        panel.appendChild(authCard)
+        authCard.hidden = false
+      }
+
+      if (securityDefs.length) {
+        const group = document.createElement('div')
+        group.className = 'settings-group'
+        for (const def of securityDefs) {
+          group.appendChild(buildSettingRow(def))
+        }
+        panel.appendChild(group)
+      }
       tabPanels.appendChild(panel)
     }
 
@@ -15932,6 +16290,10 @@ async function openResearchDoc(agent, name) {
       document.getElementById('archivedSearchBtn').addEventListener('click', doArchivedSearch)
       document.getElementById('archivedRefreshBtn').addEventListener('click', doArchivedSearch)
       document.getElementById('archivedQ').addEventListener('keydown', e => { if (e.key === 'Enter') doArchivedSearch() })
+      // Back button mirrors the kanban row's Archivaltak entry point; explicit
+      // switchPage (not history.back) so it works on direct-link arrivals too.
+      const backBtn = document.getElementById('archivedBackToKanban')
+      if (backBtn) backBtn.addEventListener('click', () => switchPage('kanban'))
       const adOverlay = document.getElementById('archivedDetailOverlay')
       document.getElementById('archivedDetailClose').addEventListener('click', () => closeModal(adOverlay))
       adOverlay.addEventListener('click', e => { if (e.target === adOverlay) closeModal(adOverlay) })
@@ -16350,6 +16712,12 @@ async function openResearchDoc(agent, name) {
 
     boardBtn.addEventListener('click', activateBoard)
     ganttBtn.addEventListener('click', activateGantt)
+
+    // Archived button: navigates AWAY to the archived page (its sidebar entry
+    // was removed -- this button is now the entry point). It never takes the
+    // 'active' state here because leaving the kanban page hides the row.
+    const archivedBtn = document.getElementById('kanbanViewArchived')
+    if (archivedBtn) archivedBtn.addEventListener('click', () => switchPage('archived'))
 
     // Period buttons
     document.querySelectorAll('#kanbanGanttFilters [data-period]').forEach(btn => {
