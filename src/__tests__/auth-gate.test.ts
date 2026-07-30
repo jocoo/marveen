@@ -36,6 +36,7 @@ describe('requiresAuth (gated-path predicate)', () => {
     expect(requiresAuth('/api/auth/status', 'GET')).toBe(false)
     expect(requiresAuth('/api/auth/login', 'POST')).toBe(false)
     expect(requiresAuth('/api/marveen/avatar', 'GET')).toBe(false)
+    expect(requiresAuth('/api/main-agent/avatar', 'GET')).toBe(false)
     expect(requiresAuth('/api/agents/zara/avatar', 'GET')).toBe(false)
   })
   it('gates every other /api/* path and the fleet manifest', () => {
