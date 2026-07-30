@@ -1,23 +1,25 @@
-# 💭 Dream Engine — 2026-07-28 02:07 (késve, ténylegesen ~07:56-kor futott)
-
-## ⚠️ Hibák
-A scheduled-task késve/backlogolva indult -- a tervezett 02:07 helyett csak 07:56-kor futott le (hasonló csúszás mint 2026-07-24-én). Emiatt a mai 07:49-es reggeli napindító még a 07-27-es (előző napi) DREAM.md tartalmát küldte ki, jelezve hogy nem friss.
+# 💭 Dream Engine — 2026-07-31 02:07
 
 ## 💡 Skill-javaslatok
-Nincs új javaslat. Az elmúlt 24 órában gyakorlatilag egyetlen memória-bejegyzés készült (Cuzcoo, a mai reggeli napindító két anomáliájáról: Dream Engine nem frissült + Gmail MCP teljesen hiányzott a ToolSearch-ből) -- ez első előfordulás mindkettőre, nem ismétlődő minta, korai lenne skillbe önteni. Sub-agentek (Kronk, Yzma, Chicha, Mata, Tipo) nem írtak memóriát vagy naplót -- idle voltak.
+Nincs új javaslat. A nap két érdemi mintázata (a `~/ClaudeClaw/scripts/skill-index.sh` téves útvonal a memoria-heartbeat szövegében, és a fork-lokális endpoint vs. upstream auth-gate integrációs rés a #218 avatar-bugnál) már élőben, a munka közben skillbe/memóriába lett öntve (marveen-upstream-sync Buktatók-patch + warm memória), nem várt a Dream Engine-re.
 
 ## 🧹 Memória-egészség
-571 / 571 vektorizált (nincs hiányzó embedding, backfill nem volt szükséges). 0 db 7+ napos érintetlen hot-tier memória (a tegnapi 7 db már cold-ba került korábban). 8 db pontos duplikátum-tartalom van az adatbázisban ("Mai megbeszelés eredménye" x4, "Szeretem a kávét" x4), de mindegyik 2026-06-08-i teszt-adat (mem-chat-1/mem-chat-2 chat_id, nem valós Telegram-forgalom), már cold-tierben -- nincs teendő.
+575 / 575 vektorizált (1 db backfill-lel pótolva). 6 db antikvált hot-tier memória (2026-07-23-i skip-skill bejegyzések, 7+ napja nem hivatkozva) cold-tierbe mozgatva. 0 pontos duplikátum.
 
 ## 🎯 Top-3 holnapi javaslat
-1. Marveen_Env #203 (auto-restart-runner macOS launchctl-t hív Linuxon, ENOENT): a 2026-07-26-os upstream sync már hozta a launchd nélküli hosztokra szóló restart-fixet -- még mindig "planned", ellenőrzés + zárás időszerű, ez már a 2. nap hogy jelezve van.
-2. Marveen_Env #209 (Sonnet 5 hiányzik a model-dropdownból): a 2026-07-24/07-26-os upstream syncek is lefedik -- még mindig "planned", ellenőrzés + zárás időszerű, szintén 2. napja jelezve.
-3. Scouts #142 (raktárkulcs átvétele) és #143 (den-inventory lista): mindkettő high priority és napok óta mozdulatlan -- fizikai jelenlétet igénylő, legrégebb óta stagnáló tételek a táblán.
+1. Marveen_Env: #203 (auto-restart-runner launchctl-bug) és #214 (Playwright-MCP bekötés) gazdátlan kártyák Kronknak dispatch-elésre várnak — a 2026-07-30-i kanban-audit óta függő adminisztratív döntés, még nem jött rá jóváhagyás.
+2. Research: #87 (YT video → Chicha/Replicate → Mata terv) és #206 (3 crochet short) ténylegesen kész, csak a `done`-flip vár Jocoo szavára — 13-14 napja mozdulatlan `in_progress` állapotban.
+3. Scouts: a magas prioritású kártyák (kulcs-átvétel a raktárhoz, den-leltár) a szeptemberi 40 éves esemény felé haladva a legkorábbi blokkolók — érdemes ezeket előrébb venni a sorban.
+
+Mellékesen egy #209 (Sonnet 5 hiányzik a dashboard model-dropdownból) kártyát menet közben ellenőriztem és lezártam: a backend `/api/models/available` lista már tartalmazza a `claude-sonnet-5`-öt, kód-szinten megerősítve (korábbi audit is készre jelezte, csak nem lett flippelve).
 
 ## 🌐 External opportunity
-Skip -- heti limit még nem telt le (utolsó keresés 1.2 napja volt).
+Skip — heti limit nincs kimerítve (4 napja volt az utolsó futás, 7 nap a küszöb), de nincs is sürgető ok kivételt tenni; a jövő heti ablakban esedékes.
 
 ## 🛠 Skill-flotta health
-8 nem-pinned skill mutat 30+ napos érintetlen mtime-ot: ai-fleet-project-execution (60 nap), github-pr-rebase-merge (60 nap), handoff (60 nap), retrospective (60 nap), skill-management (60 nap), skill-factory (59 nap), marveen-dashboard-deploy (50 nap), stop-and-reassess-3-iter (39 nap). Nem javaslok törlést -- a skill_usage tábla továbbra is üres, csak fájl-időbélyeg proxy áll rendelkezésre, ez önmagában nem elég megbízható.
+Nem tudok konkrét "X napja nem használt" állítást tenni: a `skill_usage` tábla flotta-szinten teljesen üres (0 sor), tehát a használat-log maga nincs bedrótozva sehol, nem csak ma nem gyűjtött. Ez inkább hiba, mint skill-egészségügyi jel — lásd lent. Fájl-mtime alapján a legrégebbi (53-63 napja nem szerkesztett) nem-pinned skillek: `ai-fleet-project-execution`, `github-pr-rebase-merge`, `handoff`, `retrospective`, `skill-management`, `skill-factory` — de ezek explicit user-parancsra (`/handoff`, `/retrospective`, `/skills`) futó, stabil skillek, a szerkesztetlenség önmagában nem jelent elavulást, nem javaslom törlésüket.
 
-*Marveen, 07:58 -- elkéstem, de itt vagyok. Most már alszom én is.*
+## ⚠️ Hibák
+A `skill_usage` tábla (agent_id, skill_name, trigger_type, created_at) 0 sort tartalmaz flotta-szinten — a use-log mechanizmus soha nem írt bele semmit egyetlen ágensnél sem. Ha a Bucket 5 elemzés éles használat-alapú "antikvált skill" jelzést akar adni a jövőben, ezt drótozni kell (vagy a skill-read/tool-call eseménynél tényleg insertálni kell ide, vagy más forrást kell keresni). Ez már a második egymást követő Dream Engine-futás ahol ez a tábla üres — felvettem #219-et Kronknak (low priority, `planned`, nem ébresztettem éjjel).
+
+*Marveen, 02:24 — most már alszom én is.*
