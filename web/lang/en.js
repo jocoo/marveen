@@ -913,6 +913,7 @@ window._i18n.en = {
 
   // --- Additional parity keys ---
   'activity.badge.main':			'main',
+  'activity.tooltip.mode':		'Permission mode: {mode}. In this mode the agent stops and waits for approval before calling a tool -- with nobody watching it can sit there for hours while still looking idle.',
   'activity.empty':			'No agents.',
   'activity.error_load':			'Failed to load activity',
   'activity.updated':			'Updated: {time}',
@@ -1528,6 +1529,7 @@ window._i18n.en = {
   'onboarding.step1.saved_restart_failed': 'Token saved, but restarting the agent failed. Restart it manually (Linux: systemctl --user restart marveen-channels), then come back here.',
   'onboarding.step1.launching':  'Launching...',
   'onboarding.step1.launched':   'Agents are starting...',
+  'onboarding.step1.launch_slow':'The agents have not come up within the expected window. On a slower machine the cold start can take a few minutes: wait a bit, then refresh this page. If nothing changes after 10 minutes, check the store/channels-failures.log file.',
   'onboarding.step2.tab':        'Telegram bot',
   'onboarding.step2.desc':       'Provide your Telegram bot token (from BotFather).',
   'onboarding.step2.token_label':'Telegram bot token',
