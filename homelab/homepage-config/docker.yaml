@@ -1,3 +1,0 @@
-homelab-proxy:
-  host: docker-socket-proxy
-  port: 2375
