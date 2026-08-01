@@ -7,7 +7,7 @@ Nincs új javaslat. A mai nap gyakorlatilag egyetlen nagy, flotta-szintű kezdem
 651 / 651 vektorizált (1 db backfill-lel pótolva, ellenőrizve). 0 antikvált hot-tier memória (minden ma aktív volt). 1 pár pontos duplikátum (2026-06-08-i "Mai megbeszelés eredménye" / "Szeretem a kávét", 4-4 példány) — már korábban cold-tierbe mozgatva, változatlanul ott marad, nem kezelendő újra.
 
 ## 🎯 Top-3 holnapi javaslat
-1. Financials: #222 (Sheets → DB implementáció) — ma este a legaktívabb szál, bank-anchor check zöld (48/48 teszt), backfill zöld utat kapott két biztonsági feltétellel; holnap várhatóan ez halad tovább leginkább.
+1. Financials: #222 (Sheets → DB implementáció) — bank-anchor check zöld (48/48 teszt), backfill zöld utat kapott, DE Jocoo-tól kell valami mielőtt indulhat: VAGY CSV-export 8 lapról (NAB_Raw, ING_Buksza_Raw, ING_HD_Raw, ING_JA_Raw, ING_Porolto_Raw, NAB_General, ING_Buksza_General, ING_HD_General — csak fejléc/oszlop-offset kell, képlet nem), VAGY egyszerűbben a FY26 spreadsheet ID (Yzma utána read-only Drive MCP-vel maga beolvassa). Nem sürgős, éles rendszert nem érint.
 2. Marveen_Env: #221 (agens munkakönyvtárak + memória-DB kiköltöztetése symlinkkel) — magas prioritás, kész terv, Jocoo sign-offjára vár, eddig blokkolja a marveen-függetlenítés lezárását.
 3. Scouts: #142 (raktárkulcs átvétele) — magas prioritás, továbbra is `planned` állapotban vesztegel, a szeptemberi 40 éves esemény korai blokkolója.
 
