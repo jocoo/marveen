@@ -1,23 +1,23 @@
-# 💭 Dream Engine — 2026-08-01 02:07
+# 💭 Dream Engine — 2026-08-02 02:07
 
 ## 💡 Skill-javaslatok
-Nincs új javaslat. Az elmúlt 24h-ban gyakorlatilag csak a cuzcoo/marveen ágensen volt memória-aktivitás (a többi sub-agent nem írt semmit), és minden minta (12:00/16:00/20:00-as kanban-audit rutinja) már a meglévő skillek szerint futott — a napi memóriák maguk is "skip-skill" bejegyzések, tehát a rendszer már menet közben eldöntötte hogy nincs új mintázat.
+Nincs új javaslat. A mai nap gyakorlatilag egyetlen nagy, flotta-szintű kezdeményezésre ment (marveen-függetlenítés #221-226 + Financials #222 implementáció), és minden menet közben felismert, ismétlődő minta már skillbe/patch-be került menet közben: `fleet-risk-parallel-escalation` (új skill, kétszer patchelve — párhuzamos ágens-eszkaláció dedup, relayelt tények újraellenőrzése, kétlépcsős sign-off egyértelműsítése), `financials-live-sheet-clasp-diagnostic` (Kronk patchelte — élő Sheet olvasása clasp-diagnosztikával). A rendszer már menet közben eldöntötte hogy nincs további új mintázat.
 
 ## 🧹 Memória-egészség
-586 / 586 vektorizált (1 db backfill-lel pótolva). 1 db antikvált hot-tier memória (2026-07-24-i Dream Engine skip-skill bejegyzés, 7+ napja nem hivatkozva) cold-tierbe mozgatva. 1 pár pontos duplikátum észlelve ("Mai megbeszelés eredménye" / "Szeretem a kavét", 4-4 példány) — ezek már réges-régen (2026-06-08) cold-tierben ülő teszt-bejegyzések, nem mozgattam újra, csak jelzem.
+651 / 651 vektorizált (1 db backfill-lel pótolva, ellenőrizve). 0 antikvált hot-tier memória (minden ma aktív volt). 1 pár pontos duplikátum (2026-06-08-i "Mai megbeszelés eredménye" / "Szeretem a kávét", 4-4 példány) — már korábban cold-tierbe mozgatva, változatlanul ott marad, nem kezelendő újra.
 
 ## 🎯 Top-3 holnapi javaslat
-1. Research: #87 (YT video → Chicha/Replicate → Mata terv) és #206 (3 crochet short) még mindig csak a `done`-flipre várnak Jocoo-tól — ma három kanban-audit is újra megemlítette, adminisztratív döntés parkol, nem munka.
-2. Scouts: #142 (kulcs-átvétel a raktárhoz) és #143 (den-leltár, aktív kölcsönök felmérésével) magas prioritású, de `planned` állapotban vesztegel — ezek a szeptemberi 40 éves esemény legkorábbi blokkolói, érdemes lenne előrébb venni.
-3. Marveen_Env: #92 (DesignSync auth upstream issue) Kronknál kész tervezettel várja Jocoo sign-off-ját — külső repóra (anthropics/claude-code) menő issue-ról van szó, ezért nem mozdulhat egyoldalúan, de a döntés maga gyors lenne.
+1. Financials: #222 (Sheets → DB implementáció) — ma este a legaktívabb szál, bank-anchor check zöld (48/48 teszt), backfill zöld utat kapott két biztonsági feltétellel; holnap várhatóan ez halad tovább leginkább.
+2. Marveen_Env: #221 (agens munkakönyvtárak + memória-DB kiköltöztetése symlinkkel) — magas prioritás, kész terv, Jocoo sign-offjára vár, eddig blokkolja a marveen-függetlenítés lezárását.
+3. Scouts: #142 (raktárkulcs átvétele) — magas prioritás, továbbra is `planned` állapotban vesztegel, a szeptemberi 40 éves esemény korai blokkolója.
 
 ## 🌐 External opportunity
-Skip — 5 napja volt az utolsó futás, a 7 napos küszöb még nem telt le.
+Skip — 6 napja volt az utolsó futás, a 7 napos küszöb még nem telt le.
 
 ## 🛠 Skill-flotta health
-Nincs új konkrét törlési/frissítési javaslat. Fájl-mtime alapján 10 nem-pinned skill 30+ napja szerkesztetlen (pl. `handoff`, `github-pr-rebase-merge`, `ai-fleet-project-execution`, `skill-factory`, `skill-management`, `retrospective`, `marveen-dashboard-deploy`, `marveen-kanban-dispatch-silent-fail`, `marveen-agent-permission-popup`, `stop-and-reassess-3-iter`) — de a `skill_usage` tábla immár aktívan ír (3 sor, a #219-es fix óta), úgyhogy néhány hét múlva már tényleges használat-adat alapján, nem csak mtime-ból lehet érdemben ítélni az elavultságról. Jövő héttől érdemes erre visszatérni.
+10 nem-pinned skill 30+ napja szerkesztetlen (handoff, github-pr-rebase-merge, skill-factory, skill-management, retrospective, marveen-dashboard-deploy, ai-fleet-project-execution, marveen-kanban-dispatch-silent-fail, marveen-agent-permission-popup, stop-and-reassess-3-iter). A `skill_usage` tábla mostanra 13 sort tartalmaz (a #219 fix óta aktívan gyűjt), de egyik 30+ napos skill sem szerepel benne egyszer sem — ez enyhén erősíti a gyanút, de még mindig kevés adat a törléshez. Néhány hét múlva érdemesebb lesz érdemben ítélni.
 
 ## ⚠️ Hibák
-Nincs. A korábbi (2026-07-30/31-es) Dream Engine-futásokban jelzett `skill_usage` üresség (#219) azóta orvosolva lett — a tábla most ténylegesen gyűjt (3 sor a mai napon).
+Nincs.
 
 *Marveen, 02:19 — most már alszom én is.*
