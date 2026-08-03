@@ -197,6 +197,51 @@ APT_LOCK_WAIT_CAP=300   # 5 perc -- az apt-daily ennyi alatt tipikusan vegez
 # az esetre, ha a pre-flight utan, de a parancs elott ugrik be egy uj holder.
 APT_OPTS="-o DPkg::Lock::Timeout=180"
 
+# ── interaktiv dialogusok kizarasa (APTPROMPT802) ────────────────────
+# 2026-08-02, eles gepen merve: az elso VALODI elso-telepitesnel a
+#   sudo apt-get install -y nodejs
+# elakadt egy whiptail ablakon ("Pending kernel upgrade"), amit a needrestart
+# apt-hookja nyitott (apt-pinvoke -m u). A telepito a Marveen appbol fut, ahol
+# nincs terminal es nincs stdin -- a dialogus tehat nem elnyomhato, a telepites
+# ott all, amig valaki kezzel ki nem lovi. A naplo elso jele: "dpkg-preconfigure:
+# unable to re-open stdin". Eddig azert nem jott elo, mert a teszt-gepeken a node
+# mar fent volt a korabbi korokbol, es ez a lepes kimaradt.
+#
+# HAROM retegben zarjuk ki, mert egy reteg sem eleg onmagaban:
+#   1. DEBIAN_FRONTEND=noninteractive -- a debconf keresek ellen.
+#   2. NEEDRESTART_MODE=a + NEEDRESTART_SUSPEND=1 -- a needrestart apt-hookja
+#      ellen; ez az, ami a konkret gepet megfogta, es amit a frontend NEM fed.
+#   3. </dev/null minden hivason -- ha egy hook megis kerdez, azonnal EOF-ot kap
+#      a helyett, hogy a telepito sajat stdinjere varna.
+#
+# MIERT INLINE ATADAS ES NEM CSAK export: a sudo alapertelmezesben env_reset-tel
+# fut, tehat az exportalt valtozo NEM jut at. Debian 13-on megmerve:
+#   export DEBIAN_FRONTEND=... ; sudo printenv DEBIAN_FRONTEND -> URES
+#   sudo DEBIAN_FRONTEND=... printenv DEBIAN_FRONTEND        -> noninteractive
+#   sudo -E printenv DEBIAN_FRONTEND                          -> noninteractive
+# Ezert a sudo-s hivasoknal a valtozok a parancs ele kerulnek, es az export CSAK
+# a `sudo -E`-vel indulo gyerekek (nodesource setup-script) miatt marad meg.
+NONINTERACTIVE_ENV="DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=a NEEDRESTART_SUSPEND=1"
+export DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=a NEEDRESTART_SUSPEND=1
+# A meglevo config-fajlokat megtartjuk, ujat nem kerdezunk: a "melyik verziot
+# tartsam meg?" dpkg-prompt ugyanugy megallitana a telepitest, mint a needrestart.
+DPKG_KEEP_CONF="-o Dpkg::Options::=--force-confold -o Dpkg::Options::=--force-confdef"
+
+# MINDEN apt-get hivas ezen a fuggvenyen megy at. Egy hely, ahol a fenti harom
+# reteg egyutt van -- egy uj hivas hozzaadasakor nem lehet elfelejteni az
+# egyiket, es a teszt ezt a fuggvenyt futtatja, nem a leirasat.
+apt_run() {
+  # shellcheck disable=SC2086
+  sudo $NONINTERACTIVE_ENV apt-get $APT_OPTS $DPKG_KEEP_CONF "$@" </dev/null
+}
+
+# dnf/yum: a -y a csomag- es GPG-kulcs-kerdeseket is elfogadja, needrestart ott
+# nincs; a stdin-lezaras viszont ugyanugy kell, es a valtozok atadasa artalmatlan.
+pkg_install_noninteractive() {
+  # shellcheck disable=SC2086
+  sudo $NONINTERACTIVE_ENV "$PKG_MANAGER" install -y "$@" </dev/null
+}
+
 # stdout: "<pid> <procnev>" ha valaki fogja barmelyik lockot; ures + exit 1 ha
 # szabad. fuser nelkul exit 2 = NEM TUDJUK megallapitani (ismeretlen allapot).
 apt_lock_holder() {
@@ -214,9 +259,18 @@ apt_lock_holder() {
   return 1
 }
 
+# A ket ertekadas alatt SZANDEKOSAN `&& rc=0 || rc=$?` all, nem `; rc=$?`.
+# A szkript `set -e` alatt fut (5. sor), es egy ertekadas kilepesi kodja a
+# parancs-behelyettesitese -- tehat `holder=$(apt_lock_holder); rc=$?` eseten a
+# shell MAR AZON A SORON kilep, ha a fuggveny nem nullat ad. Az pedig pontosan
+# akkor ad nem nullat, amikor NINCS zar (return 1) vagy nincs fuser (return 2),
+# vagyis a haromallapotu logika alatta SOSEM futott le: az egyetlen tulelo ag az
+# volt, amikor tenyleg fogta valaki a lockot. A zar-figyelo igy a NYUGODT gepen
+# olte meg a telepitest, es a lock-versenyes gepen engedte at -- ezert ment at a
+# 07-30-i workshopon es bukott egy friss VPS-en 08-02-an.
 wait_for_apt_lock() {
   local holder rc waited=0 interval=5
-  holder=$(apt_lock_holder); rc=$?
+  holder=$(apt_lock_holder) && rc=0 || rc=$?
   if [ "$rc" -eq 2 ]; then
     # fuser nincs (minimal image) -- nem tudjuk MEGNEZNI, ki fogja a lockot.
     # Ezt kimondjuk, es az APT_OPTS timeout-ja kezeli, ha tenyleg fogott.
@@ -228,7 +282,7 @@ wait_for_apt_lock() {
   echo -e "  ${DIM}$(_t linux.apt_lock_transient_hint)${NC}"
   while [ "$waited" -lt "$APT_LOCK_WAIT_CAP" ]; do
     sleep "$interval"; waited=$((waited + interval))
-    holder=$(apt_lock_holder); rc=$?
+    holder=$(apt_lock_holder) && rc=0 || rc=$?
     if [ "$rc" -ne 0 ]; then
       ok "$(_t linux.apt_lock_freed_prefix) ${waited}s"
       return 0
@@ -317,8 +371,8 @@ if [ -n "$MISSING_PKGS" ]; then
       # kulonben a repo-lepes neman kimarad, a disztro sajat (regebbi) nodejs-e
       # telepul, es Debianon az npm (kulon csomag) le se jon -> [1/7] fail.
       if ! command -v curl &>/dev/null; then
-        sudo apt-get $APT_OPTS update -qq || true
-        sudo apt-get $APT_OPTS install -y curl -qq || true
+        apt_run update -qq || true
+        apt_run install -y curl -qq || true
         hash -r
       fi
       echo -e "  Node.js v22 repo hozzaadasa (nodesource)..."
@@ -328,7 +382,7 @@ if [ -n "$MISSING_PKGS" ]; then
       NODESOURCE_OK=false
       if command -v curl &>/dev/null; then
         NODESOURCE_SETUP="$(curl -fsSL https://deb.nodesource.com/setup_22.x 2>/dev/null || true)"
-        if [ -n "$NODESOURCE_SETUP" ] && echo "$NODESOURCE_SETUP" | sudo -E bash - >/dev/null 2>&1; then
+        if [ -n "$NODESOURCE_SETUP" ] && echo "$NODESOURCE_SETUP" | sudo -E $NONINTERACTIVE_ENV bash - >/dev/null 2>&1; then
           NODESOURCE_OK=true # a nodesource nodejs csomag node+npm-et egyben hozza
         fi
       fi
@@ -336,14 +390,14 @@ if [ -n "$MISSING_PKGS" ]; then
         # Fallback: disztro sajat nodejs-e. Debianon az npm kulon csomag,
         # a nodesource-bundle-lel ellentetben nem jon a nodejs-sel magatol.
         warn "nodesource repo hozzaadasa sikertelen -- a disztro sajat nodejs + npm csomagjat telepitem."
-        sudo apt-get $APT_OPTS update -qq
+        apt_run update -qq
         MISSING_PKGS="$MISSING_PKGS npm"
       fi
     else
-      sudo apt-get $APT_OPTS update -qq
+      apt_run update -qq
     fi
     # shellcheck disable=SC2086
-    sudo apt-get $APT_OPTS install -y $MISSING_PKGS -qq
+    apt_run install -y $MISSING_PKGS -qq
   else
     # dnf/yum (Fedora/Nobara/RHEL). A disztro nodejs csomagja v20+ az aktualis
     # kiadasokon, es az npm-et is tartalmazza -- nincs szukseg kulso repora.
@@ -351,7 +405,7 @@ if [ -n "$MISSING_PKGS" ]; then
     # python3/pipx/unzip/nodejs). Az ffmpeg-hez Fedoran az RPM Fusion repo
     # kellhet; ha mar engedelyezve van, a csomag elerheto.
     # shellcheck disable=SC2086
-    sudo "$PKG_MANAGER" install -y $MISSING_PKGS
+    pkg_install_noninteractive $MISSING_PKGS
   fi
 fi
 
@@ -638,8 +692,10 @@ echo -e "  ${DIM}Headless Claude Code teszt...${NC}"
 # assignment, not the pipeline inside the substitution (measured). Dropping the
 # pipe entirely is the only form that reports claude's own status; the output is
 # truncated afterwards in the shell.
-CLAUDE_PROBE_OUT=$(claude --print "ping" 2>&1)
-CLAUDE_PROBE_EXIT=$?
+# The `&& ... || ...` guard is what keeps a failing probe out of the ERR trap:
+# the trap fires regardless of the errexit setting and on_error() exits 1, so an
+# unguarded capture aborted the installer instead of reaching the branch below.
+CLAUDE_PROBE_OUT=$(claude --print "ping" 2>&1) && CLAUDE_PROBE_EXIT=0 || CLAUDE_PROBE_EXIT=$?
 CLAUDE_PROBE_OUT=${CLAUDE_PROBE_OUT:0:200}
 if [ "$CLAUDE_PROBE_EXIT" -eq 0 ] && [ -n "$CLAUDE_PROBE_OUT" ]; then
   ok "Az OPERATOR shelljebol futtathato a Claude Code (\`claude --print\` valaszolt)"
@@ -912,6 +968,14 @@ env_keep_or_set() {
   if [ -z "$2" ] && [ -n "$_eks_existing" ]; then return 0; fi
   env_merge_key "$1" "$2"
 }
+env_set_if_absent() {
+  # env_set_if_absent KEY VALUE -- write only when the KEY line does not exist
+  # at all. Used for a default the installer proposes rather than enforces: an
+  # operator who deliberately set KEY=0 keeps that decision across re-runs, and
+  # an explicitly set KEY=1 is not rewritten either.
+  if grep -q "^$1=" "$INSTALL_DIR/.env" 2>/dev/null; then return 0; fi
+  env_merge_key "$1" "$2"
+}
 (umask 077 && touch "$INSTALL_DIR/.env")
 chmod 600 "$INSTALL_DIR/.env"
 [ -s "$INSTALL_DIR/.env" ] || printf '# Main agent konfiguracio\n' >> "$INSTALL_DIR/.env"
@@ -957,6 +1021,21 @@ if [ -n "${OAUTH_TOKEN_INPUT:-}" ] && printf '%s' "$OAUTH_TOKEN_INPUT" | grep -E
   mkdir -p "$INSTALL_DIR/store"
   (umask 077 && printf '%s' "$OAUTH_TOKEN_INPUT" > "$INSTALL_DIR/store/.claude-oauth-token")
   ok "Fleet setup-token eltarolva (store/.claude-oauth-token) -- per-agent izolacio aktiv"
+  # Point the MAIN agent at an isolated config dir too, not just the
+  # sub-agents. Without this the main bot keeps the shared ~/.claude and
+  # authenticates from whatever refreshes that root -- on Linux the shared
+  # ~/.claude/.credentials.json -- which periodically expires and 401s the bot
+  # into a parked TUI that the router reads as busy, so the channel goes silent
+  # with no error (the confirmed root cause of the 2026-07-23 marveen-channels
+  # outage). The setting existed but nothing ever turned it on, so every
+  # default install was wired to that failure mode.
+  #
+  # Only in THIS branch, i.e. only when the installer just captured the fleet
+  # token itself in this same run: the operator handed it over moments ago, so
+  # the identity the main bot will run under is not a surprise. An install that
+  # already carried auth keeps whatever it had. env_set_if_absent, so a
+  # deliberate MAIN_AGENT_ISOLATED_CONFIG=0 stands.
+  env_set_if_absent MAIN_AGENT_ISOLATED_CONFIG 1
 fi
 ok ".env letrehozva (chmod 600)"
 
@@ -990,16 +1069,16 @@ else
   _probe_out=""
   _probe_rc=1
   if command -v claude >/dev/null 2>&1; then
+    # A 401 here is the VERDICT this gate exists to report, not an installer
+    # error -- see the guard rationale above the operator-shell probe.
     if [ -n "$_svc_token" ]; then
       _probe_out="$(env -i PATH="$PATH" HOME="$HOME" CLAUDE_CONFIG_DIR="$_probe_cfg" \
         CLAUDE_CODE_OAUTH_TOKEN="$_svc_token" \
-        claude --print "ping" 2>&1)"
-      _probe_rc=$?
+        claude --print "ping" 2>&1)" && _probe_rc=0 || _probe_rc=$?
     else
       _probe_out="$(env -i PATH="$PATH" HOME="$HOME" CLAUDE_CONFIG_DIR="$_probe_cfg" \
         ANTHROPIC_API_KEY="$_svc_apikey" \
-        claude --print "ping" 2>&1)"
-      _probe_rc=$?
+        claude --print "ping" 2>&1)" && _probe_rc=0 || _probe_rc=$?
     fi
     _probe_out=${_probe_out:0:200}
     if [ "$_probe_rc" -eq 0 ] && [ -n "$_probe_out" ]; then
@@ -1680,8 +1759,31 @@ fi
 SVCFAIL=0
 if pidof systemd >/dev/null 2>&1 && systemctl --user status >/dev/null 2>&1; then
   systemctl --user daemon-reload
-  systemctl --user enable "${DASH_UNIT}" "${CHAN_UNIT}" "${MORN_UNIT}.timer" "${SERVICE_ID}-host-watchdog.service" 2>/dev/null || true
-  ok "systemd unitok generalva es engedelyezve"
+  # The green tick used to print unconditionally after a `|| true`, so a failed
+  # enable was reported as success -- the visible version of the same defect the
+  # macOS branch had. `if` rather than `&&`: a failing enable inside an if
+  # CONDITION is exempt from errexit and from the ERR trap, so the installer
+  # reports it instead of dying on it.
+  if systemctl --user enable "${DASH_UNIT}" "${CHAN_UNIT}" "${MORN_UNIT}.timer" "${SERVICE_ID}-host-watchdog.service" 2>/dev/null; then
+    ok "systemd unitok generalva es engedelyezve"
+  else
+    warn "A unit-fajlok elkeszultek, de az engedelyezesuk nem sikerult -- ujrainditas utan a szolgaltatasok nem indulnak el maguktol."
+    # ALL FOUR units the enable above covers, not just the two services. A
+    # command that silently drops the timer and the watchdog would leave them
+    # disabled while the operator sees no error and believes the fix worked --
+    # an incomplete instruction ends the same way as a false claim.
+    # The label gets its own line. With "Javitas most:" in front of the command,
+    # the backslashes join all three printed lines into ONE command whose first
+    # token is `Javitas`, so a pasted block fails with "Javitas: command not
+    # found" and enables nothing. Measured by rendering the block and running it.
+    # `bash -n` does NOT catch this: the pasted text is valid shell, just a
+    # different command than the one we meant to offer. Same shape as
+    # install-macos.sh, where the label is already on its own line.
+    echo -e "  ${DIM}Javitas most:${NC}"
+    echo -e "  ${DIM}systemctl --user enable \\${NC}"
+    echo -e "  ${DIM}    ${DASH_UNIT} ${CHAN_UNIT} \\${NC}"
+    echo -e "  ${DIM}    ${MORN_UNIT}.timer ${SERVICE_ID}-host-watchdog.service${NC}"
+  fi
   systemctl --user start "${DASH_UNIT}" "${CHAN_UNIT}" 2>/dev/null || true
   sleep 2
   for svc in "${DASH_UNIT}" "${CHAN_UNIT}"; do
