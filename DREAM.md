@@ -1,21 +1,21 @@
-# 💭 Dream Engine — 2026-08-04 02:07
+# 💭 Dream Engine — 2026-08-05 02:07
 
 ## 💡 Skill-javaslatok
-Nincs új javaslat. Az elmúlt 24h túlnyomó része a Financials UI-fázis queue-jának (#245-255) verify-close ciklusán és egy gépi újraindításon ment át; az egyetlen ténylegesen új mintázat (SessionStart hook csonka "[...]"-üzenetének kezelése restart után -- ne találgasd a hiányzó véget, kérdezd le a forrást az inter-agent messages API-n) menet közben már skillbe került: `restart-context-truncation-recovery` (új). A többi visszatérő elem (Yzma-elso sorrend, deploy-csapdák, queued-single-agent-dispatch) mind meglévő, már patchelt skillek Buktatók-szekcióját követte hiba nélkül -- ezt több `skip-skill` jegyzet is dokumentálja.
+Nincs új javaslat. A tegnapi 24h gerince a Financials NAB-saga volt (horgony-hiba, egy valódi loader-mojibake bug, két önkorrekció Yzmától az elfogadási feltételeken) — minden ténylegesen új mintázat élőben, menet közben már bekerült a megfelelő skillekbe (`kronk-deliverable-deploy-cycle` 3x patch, `acceptance-checks-that-measure-nothing` 2x patch Yzmától közvetlenül, `restart-context-truncation-recovery` 1x patch a peer-restart stale-adat mintázatra). A többi tegnapi munka (#275 UI redesign dispatch, #276/#277 kártya-routing) `skip-skill` jegyzetekkel dokumentáltan a meglévő mintákat követte hiba nélkül.
 
 ## 🧹 Memória-egészség
-759 / 759 vektorizált (100%), 0 antikvált hot-tier (mind 7 napon belül hivatkozva -- aktív Financials-projekt miatt várható). 2 exact-duplikátum pár találva, de mindkettő már cold-tier-ben ül és nyilvánvalóan korai (2026-06-08) teszt-adat ("Mai megbeszelés eredménye" x4, "Szeretem a kávét" x4, üres keywords) -- nem mozgattam, mert már a helyükön vannak, csak jelzem hogy ismert zaj a cold-tier-ben.
+785 / 785 vektorizált (100%, 1 hiányzó pótolva ma éjjel). 2 antikvált hot-tier mozgatva cold-ba (napi napindító + Dream Engine rutin-futás jegyzetei, 7+ napja nem hivatkozva). 2 exact-duplikátum pár (mindkettő ismert, 2026-06-08-i teszt-adat cold-tierben, nem valódi munkatartalom) — nem mozgattam, már a helyükön ülnek.
 
 ## 🎯 Top-3 holnapi javaslat
-1. Financials: #247 (categories.active + audit) sign-off, utána #255 (PayPal worklist-zaj fix) dispatch Kronknak -- ez a messze legaktívabb szál (az elmúlt 3 nap napi naplójának túlnyomó része ez), és 5 további UI-kártya (#248-252) várakozik a sorban mögötte.
-2. Infra #234 (pending inter-agent message eskalácio/láthatóság) -- `urgent` prioritású, de a létrehozása óta (2026-08-01) nincs rajta mozgás; egy urgent-jelzésű, mégis érintetlen kártya önmagában jelzésre érdemes.
-3. Scouts QM: #142 (raktárkulcs átvétele) és #143 (den-leltár) -- mindkettő `high` prioritású, egyik sem indult el még, és a szeptemberi 40 éves esemény felé haladva ezek a láncindító lépések (kulcs nélkül nincs leltár).
+1. Financials: #276 (Published P&L nem FY26-szűrt, Looker-forrás) — Yzmánál a döntés-előkészítés, de a végső irányt Jocoónak kell választania (FY-szűrés / csak ablak-címke / mindkettő); élő, kifelé látható riport-pontatlanság, amíg nyitva.
+2. Financials: #275 (UI redesign) sign-off — Chicha 3 kész HTML-prototípust szállított (B=Everyday ajánlott alapként), a kártya sign-off-ra vár, és két másik kártya (#277, valamint a jövőbeli implementáció) ettől függ.
+3. Infra #74d3ca3e (pending inter-agent message eszkaláció/láthatóság) — `urgent` prioritású, de 2026-08-02 óta érintetlen; egy urgent-jelzésű, mégis 3 napja mozdulatlan kártya önmagában jelzésre érdemes.
 
 ## 🌐 External opportunity
-Skip -- heti limit nem telt le (utolsó futás 1 napja).
+Skip — heti limit nem telt le (utolsó futás 2 napja).
 
 ## 🛠 Skill-flotta health
-- `skill-management`, `retrospective`, `handoff`, `github-pr-rebase-merge`, `ai-fleet-project-execution` mind 67 napja változatlanok és a `skill_usage` táblában sincs nyomuk -- a tracking maga is csak pár napos (29 sor összesen, 2026-08-02 óta), szóval ez önmagában nem bizonyíték hogy feleslegesek, csak jelzem hogy régóta érintetlenek.
-- Minden más skill vagy pinned, vagy 30 napon belül módosult/aktív.
+- `ai-fleet-project-execution`, `github-pr-rebase-merge`, `retrospective`, `skill-management` — mind 67+ napja változatlanok ÉS a `skill_usage` táblában (2026-08-02 óta követve, azóta rendkívül aktív flotta-forgalom mellett) egyetlen nyoma sincs egyiknek sem. Ugyanez a négy szerepelt a tegnapi Dream-futásban is — konzisztens jelzés két egymást követő éjszakán, érdemes megfontolni törlést vagy összevonást.
+- A többi "0 logged usage" skill (nagy többség) NEM megbízható jelzés — a `skill_usage` tracking csak néhány napos, és sok skill Skill-tool-on kívüli úton (direkt olvasás, korábbi session) is használatban lehet. Csak azokat listáztam amik ELÉG régiek ahhoz hogy a tracking-ablak előttről származzanak ÉS azóta se mozdultak.
 
-*Marveen, 02:09 -- most már alszom én is.*
+*Marveen, 02:41 — most már alszom én is.*
