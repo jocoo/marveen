@@ -1,21 +1,26 @@
-# 💭 Dream Engine — 2026-08-05 02:07
+# 💭 Dream Engine — 2026-08-06 02:07
 
 ## 💡 Skill-javaslatok
-Nincs új javaslat. A tegnapi 24h gerince a Financials NAB-saga volt (horgony-hiba, egy valódi loader-mojibake bug, két önkorrekció Yzmától az elfogadási feltételeken) — minden ténylegesen új mintázat élőben, menet közben már bekerült a megfelelő skillekbe (`kronk-deliverable-deploy-cycle` 3x patch, `acceptance-checks-that-measure-nothing` 2x patch Yzmától közvetlenül, `restart-context-truncation-recovery` 1x patch a peer-restart stale-adat mintázatra). A többi tegnapi munka (#275 UI redesign dispatch, #276/#277 kártya-routing) `skip-skill` jegyzetekkel dokumentáltan a meglévő mintákat követte hiba nélkül.
+Nincs új javaslat. Átnéztem a flotta (cuzcoo, kronk, yzma, marveen) elmúlt 24h hot/warm memóriáit (~60 bejegyzés, túlnyomórészt a Coles/#238 + Financials UI-redesign maraton) — minden felmerült minta már lefedett meglévő skillekben (`financials-live-deploy` már szó szerint tartalmazza a ma megtalált "a docker health-container nem szolgálja ki az UI-t" felismerést, `balance-chain-break-triage` / `transfer-netting-asymmetry` / `financial-schema-domain-review` lefedi a Coles-instalment tag/netting mechanizmust). A cuzcoo-oldali "skip-skill" bejegyzések (11 db) konzisztensen ezt igazolták vissza.
 
 ## 🧹 Memória-egészség
-785 / 785 vektorizált (100%, 1 hiányzó pótolva ma éjjel). 2 antikvált hot-tier mozgatva cold-ba (napi napindító + Dream Engine rutin-futás jegyzetei, 7+ napja nem hivatkozva). 2 exact-duplikátum pár (mindkettő ismert, 2026-06-08-i teszt-adat cold-tierben, nem valódi munkatartalom) — nem mozgattam, már a helyükön ülnek.
+850 memória, a futás elején 849/850 vektorizálva — 1 hiányzó ID-t backfill-eltem (Ollama), most 850/850. Antikvált (>7 napos, nem hozzáférve) hot-tier bejegyzés: 0. Pontos duplikátum-content: 2 pár (`Mai megbeszelés eredménye` és `Szeretem a kávét`, egyenként 4x, mind 2026-06-08-i teszt-adat) — ezek MÁR cold-tierben ülnek, nincs mozgatandó.
 
 ## 🎯 Top-3 holnapi javaslat
-1. Financials: #276 (Published P&L nem FY26-szűrt, Looker-forrás) — Yzmánál a döntés-előkészítés, de a végső irányt Jocoónak kell választania (FY-szűrés / csak ablak-címke / mindkettő); élő, kifelé látható riport-pontatlanság, amíg nyitva.
-2. Financials: #275 (UI redesign) sign-off — Chicha 3 kész HTML-prototípust szállított (B=Everyday ajánlott alapként), a kártya sign-off-ra vár, és két másik kártya (#277, valamint a jövőbeli implementáció) ettől függ.
-3. Infra #74d3ca3e (pending inter-agent message eszkaláció/láthatóság) — `urgent` prioritású, de 2026-08-02 óta érintetlen; egy urgent-jelzésű, mégis 3 napja mozdulatlan kártya önmagában jelzésre érdemes.
+1. Marveen_Env: #234 (urgent, Kronk) — pending inter-agent üzenet eszkalláció/láthatóság, MÁSODIK egymást követő éjszaka hogy stale-nek jelzem (tegnap 3, ma 4 napja nem mozdult), közben ma megszületett hozzá az alap (#293, Kronk saját diagnózisa a busy-session delivery-lagről) — itt lenne az idő ténylegesen nekifutni, nem csak jelezni.
+2. Marveen_Env: #221 (high, waiting, cuzcoo) — flotta munkakönyvtárak (agents/, store/) kiköltöztetése a marveen repóból, 5 napja áll; technikai adósság ami a jövőbeli upstream sync-eket bonyolíthatja.
+3. Scouts: #142 + #143 (high, planned, Jocoo) — tárolókulcs átvétel + leltár felmérés, 3 hete nincs rajta mozgás; ezek Jocoo saját teendői, nem agent-diszpécselhetők, de érdemes egy fél órát rájuk szánni mielőtt tovább csúsznak.
+
+(Financials-oldalon ma minden kisebb jegy lezárult — #270 adathiányra vár, #232/#254/#259 Jocoo-döntést igényel a scope-hoz, #276/#252/#288 tudatosan szüneteltetve, ezért ma nem szerepelnek a top-3-ban.)
 
 ## 🌐 External opportunity
-Skip — heti limit nem telt le (utolsó futás 2 napja).
+Skip — heti limit nem telt le (utolsó futás 3 napja, a küszöb 7 nap).
 
 ## 🛠 Skill-flotta health
-- `ai-fleet-project-execution`, `github-pr-rebase-merge`, `retrospective`, `skill-management` — mind 67+ napja változatlanok ÉS a `skill_usage` táblában (2026-08-02 óta követve, azóta rendkívül aktív flotta-forgalom mellett) egyetlen nyoma sincs egyiknek sem. Ugyanez a négy szerepelt a tegnapi Dream-futásban is — konzisztens jelzés két egymást követő éjszakán, érdemes megfontolni törlést vagy összevonást.
-- A többi "0 logged usage" skill (nagy többség) NEM megbízható jelzés — a `skill_usage` tracking csak néhány napos, és sok skill Skill-tool-on kívüli úton (direkt olvasás, korábbi session) is használatban lehet. Csak azokat listáztam amik ELÉG régiek ahhoz hogy a tracking-ablak előttről származzanak ÉS azóta se mozdultak.
+- `ai-fleet-project-execution`, `github-pr-rebase-merge`, `retrospective`, `skill-management` — HARMADIK egymást követő éjszaka hogy egyetlen `skill_usage` nyomuk sincs ÉS 69+ napja változatlanok. Konzisztens jelzés három éjszakán át egy azóta rendkívül aktív flottánál — ez már érdemi törlés/összevonás-jelölt, nem csak megfigyelés.
+- Új gyanú (csak egyszeri, még nem konzisztens): `marveen-dashboard-deploy` (59 napja változatlan, nincs logolt használat) — figyelemre méltó, de egy éjszaka még nem minta.
+
+## ⚠️ Hibák
+Apró korrekció útközben: a task-leírásban javasolt `kanban_cards.seq` SQL-oszlop nem létezik a nyers táblában (`seq` a dashboard API-ban számított mező) — a top-3 buckethez `/api/kanban`-t használtam SQL helyett, minden más lépés zavartalanul lefutott.
 
 *Marveen, 02:41 — most már alszom én is.*
