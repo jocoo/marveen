@@ -11,6 +11,7 @@ import {
 import { buildHandoffContent } from '../channel-coordinator.js'
 import { COORDINATOR_AGENT_ID } from '../channel-coordinator/ingest.js'
 import { tryHandleMessages } from '../web/routes/messages.js'
+import { classificationAudit } from '../web/agent-message-wrap.js'
 
 // Regression tests for the channel-inbound framing fix (2026-06-02 cutover
 // post-mortem): the coordinator backfill handoff used to arrive at Marveen as
@@ -169,5 +170,49 @@ describe('contrast: untrusted wrap still adds the wrapper (non-coordinator uncha
     const out = wrapUntrusted('agent:zara', 'status update')
     expect(out).toMatch(/^<untrusted source="agent:zara">/)
     expect(out).toContain('status update')
+  })
+})
+
+// #23a6a8ee — diagnostic audit for the false untrusted-flagging of genuine owner
+// Telegram messages. The classification decision was never logged, so 11+
+// occurrences yielded no root cause. classificationAudit builds the record and
+// flags the incident signature (a channel-looking body NOT framed channel-inbound).
+describe('classificationAudit (#23a6a8ee untrusted-flag diagnostics)', () => {
+  it('flags mismatch when a channel-looking body is NOT classified channel-inbound', () => {
+    const body = 'chat_id=8661220490 Menjunk tovabb a kovetkezovel'
+    const a = classificationAudit('telegram-coordinator', 'cuzcoo', 'untrusted', body, 2434)
+    expect(a.looksChannel).toBe(true)
+    expect(a.mismatch).toBe(true)   // the exact incident shape: real user msg framed external
+    expect(a.category).toBe('untrusted')
+    expect(a.msgId).toBe(2434)
+  })
+  it('no mismatch when a channel-looking body IS classified channel-inbound (the correct path)', () => {
+    const block = '<channel source="telegram" chat_id="8661220490">hi</channel>'
+    const a = classificationAudit('telegram-coordinator', 'cuzcoo', 'channel-inbound', block, 1)
+    expect(a.looksChannel).toBe(true)
+    expect(a.mismatch).toBe(false)
+  })
+  it('a plain inter-agent trusted-peer message is not channel-looking and never a mismatch', () => {
+    const a = classificationAudit('kronk', 'cuzcoo', 'trusted-peer', 'deploy done, commit abc123', 7)
+    expect(a.looksChannel).toBe(false)
+    expect(a.mismatch).toBe(false)
+  })
+  it('detects both channel markers: a <channel> tag and a bare chat_id=', () => {
+    expect(classificationAudit('x', 'y', 'untrusted', 'foo <channel source="telegram"> bar', 1).looksChannel).toBe(true)
+    expect(classificationAudit('x', 'y', 'untrusted', 'reply chat_id = 123', 1).looksChannel).toBe(true)
+    expect(classificationAudit('x', 'y', 'untrusted', 'just some text', 1).looksChannel).toBe(false)
+  })
+})
+
+// Both delivery paths (router + drain-inbox) must emit the audit, or a flagged
+// message on the un-instrumented path would leave no trace — the exact gap that
+// made this un-diagnosable. Assert both call sites reference classificationAudit.
+describe('classificationAudit is wired on BOTH delivery paths (#23a6a8ee)', () => {
+  const AGENTS_ROUTE_SRC = readFileSync(join(here, '../web/routes/agents.ts'), 'utf-8')
+  it('the message-router (tmux inject) path logs the classification', () => {
+    expect(ROUTER_SRC).toContain('classificationAudit(')
+  })
+  it('the drain-inbox (main-agent pull) path logs the classification', () => {
+    expect(AGENTS_ROUTE_SRC).toContain('classificationAudit(')
   })
 })

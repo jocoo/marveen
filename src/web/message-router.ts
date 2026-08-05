@@ -28,7 +28,7 @@ import {
 import { MAIN_CHANNELS_SESSION } from './main-agent.js'
 import { sendMarveenAlert } from './telegram.js'
 import { setLastInboundModality } from './voice-modality.js'
-import { classifyAgentMessage, wrapAgentMessageForDelivery } from './agent-message-wrap.js'
+import { classifyAgentMessage, wrapAgentMessageForDelivery, classificationAudit } from './agent-message-wrap.js'
 import { maybeWakeSubAgentsForTelegram } from './telegram-inbox-wake.js'
 
 // A message that cannot be delivered within this window (target session never
@@ -593,6 +593,11 @@ export async function runMessageRouterTick(): Promise<void> {
         continue
       }
       const { category, safeFrom: safeFromAgent } = cls
+      // #23a6a8ee: record the classification decision so the false untrusted-flag
+      // can be root-caused on its next occurrence (see classificationAudit).
+      const audit = classificationAudit(msg.from_agent, msg.to_agent, category, msg.content, msg.id)
+      if (audit.mismatch) logger.warn({ ...audit, path: 'router' }, 'channel-framing MISMATCH: a channel-looking message classified NON-channel-inbound (#23a6a8ee untrusted-flag lead)')
+      else logger.info({ ...audit, path: 'router' }, 'agent-message classified')
       const isChannelInbound = category === 'channel-inbound'
       const trusted = category === 'trusted-peer'
 

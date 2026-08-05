@@ -6,7 +6,7 @@ import { logger } from '../../logger.js'
 import { isModelProfileId, MODEL_PROFILE_IDS } from '../../model-profiles.js'
 import { MAIN_AGENT_ID, currentBotName, PROJECT_ROOT } from '../../config.js'
 import { createAgentMessage, listPendingChannelRequests, updateChannelRequestStatus, getDb, claimPendingForAgent, markMessageFailed } from '../../db.js'
-import { classifyAgentMessage, wrapAgentMessageForDelivery } from '../agent-message-wrap.js'
+import { classifyAgentMessage, wrapAgentMessageForDelivery, classificationAudit } from '../agent-message-wrap.js'
 import { ensureFederationClaudeMdSection } from '../federation/onboarding.js'
 import { atomicWriteFileSync } from '../atomic-write.js'
 import { CHANNEL_PLUGIN_IDS } from '../plugin-ids.js'
@@ -1827,6 +1827,11 @@ export async function tryHandleAgents(ctx: RouteContext, webDir: string): Promis
         }
         continue
       }
+      // #23a6a8ee: record the classification decision on the drain-inbox path too
+      // (same audit shape as the router, so the log can't drift between paths).
+      const audit = classificationAudit(msg.from_agent, msg.to_agent, cls.category, msg.content, msg.id)
+      if (audit.mismatch) logger.warn({ ...audit, path: 'drain-inbox' }, 'channel-framing MISMATCH: a channel-looking message classified NON-channel-inbound (#23a6a8ee untrusted-flag lead)')
+      else logger.info({ ...audit, path: 'drain-inbox' }, 'agent-message classified')
       const { prefix, wrapped } = wrapAgentMessageForDelivery(cls.category, cls.safeFrom, msg.from_agent, msg.content, msg.id, msg.origin_note)
       blocks.push(prefix + wrapped)
     }

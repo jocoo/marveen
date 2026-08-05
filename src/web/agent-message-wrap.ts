@@ -28,6 +28,37 @@ const CHANNEL_COORDINATOR_AGENTS = new Set<string>([COORDINATOR_AGENT_ID])
 
 export type AgentMessageCategory = 'channel-inbound' | 'trusted-peer' | 'untrusted' | 'federated'
 
+// #256 / kanban #23a6a8ee — diagnostic audit for the false untrusted-flagging of
+// genuine owner Telegram messages. Root-cause was un-pinnable across 11+
+// occurrences because NOTHING logged the classification decision: there was no
+// record of which from_agent a flagged message carried or which category it got.
+// This builds a structured, single-source log object (both delivery paths call it,
+// so the shape can't drift) recording the decision. `mismatch` flags the incident
+// signature: a message whose BODY carries a native channel marker (a <channel>
+// block or a chat_id=) yet did NOT classify as channel-inbound -- i.e. a real
+// relayed user message about to be framed as external/untrusted. When it fires,
+// the from_agent + content in the log pin whether this is the coordinator path (a
+// Marveen bug to fix) or an absence (the native-plugin/harness path, an upstream
+// report). Timing is stamped by the logger; correlate with session-busy windows
+// (Jocoo's rapid-succession/mid-turn lead).
+export function classificationAudit(
+  fromAgent: string,
+  toAgent: string,
+  category: AgentMessageCategory | 'rejected',
+  content: string,
+  msgId?: number,
+): { msgId: number | null; fromAgent: string; toAgent: string; category: string; looksChannel: boolean; mismatch: boolean } {
+  const looksChannel = /<\s*channel\b/i.test(content) || /\bchat_id\s*=/i.test(content)
+  return {
+    msgId: msgId ?? null,
+    fromAgent,
+    toAgent,
+    category,
+    looksChannel,
+    mismatch: looksChannel && category !== 'channel-inbound',
+  }
+}
+
 // Classify an inter-agent message's delivery category, in priority order on the
 // SANITIZED from-id. Returns null when the from_agent collapses to empty after
 // sanitize (the caller must reject/fail such a message, never wrap it).
