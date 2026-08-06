@@ -1,26 +1,21 @@
-# 💭 Dream Engine — 2026-08-06 02:07
+# 💭 Dream Engine — 2026-08-07 02:07
 
 ## 💡 Skill-javaslatok
-Nincs új javaslat. Átnéztem a flotta (cuzcoo, kronk, yzma, marveen) elmúlt 24h hot/warm memóriáit (~60 bejegyzés, túlnyomórészt a Coles/#238 + Financials UI-redesign maraton) — minden felmerült minta már lefedett meglévő skillekben (`financials-live-deploy` már szó szerint tartalmazza a ma megtalált "a docker health-container nem szolgálja ki az UI-t" felismerést, `balance-chain-break-triage` / `transfer-netting-asymmetry` / `financial-schema-domain-review` lefedi a Coles-instalment tag/netting mechanizmust). A cuzcoo-oldali "skip-skill" bejegyzések (11 db) konzisztensen ezt igazolták vissza.
+Nincs új javaslat. A tegnapi nap gyakorlatilag egyetlen, nagyon hosszú Financials-sorozat volt (#270→#294→#296→#298→#299/#300/#301), és menet közben minden felmerülő minta már valós időben bekerült a megfelelő skillekbe (financials-live-deploy 4x patchelve — restart-confirm célja, temp-DB cleanup, "ne nyiss újra zöld kaput", re-verify-then-fold elve; queued-single-agent-dispatch — gyors 3-szereplős kereszteződésnél konszolidált állapot-üzenet). A 21 cuzcoo skip-skill bejegyzés ezt konzisztensen megerősítette. Egy meta-mintázat érdemes megjegyzésre, de nem skill-igényű: a mai kör tele volt üzenet-kereszteződéssel Kronk és Yzma között annak ellenére, hogy a skill-patch már bent volt — ez inkább a #234-es infra-jegy (üzenetkézbesítési torlódás) sürgősségét húzza alá, nem egy hiányzó eljárási lépést.
 
 ## 🧹 Memória-egészség
-850 memória, a futás elején 849/850 vektorizálva — 1 hiányzó ID-t backfill-eltem (Ollama), most 850/850. Antikvált (>7 napos, nem hozzáférve) hot-tier bejegyzés: 0. Pontos duplikátum-content: 2 pár (`Mai megbeszelés eredménye` és `Szeretem a kávét`, egyenként 4x, mind 2026-06-08-i teszt-adat) — ezek MÁR cold-tierben ülnek, nincs mozgatandó.
+878/878 vektorizálva (1 hiányzó ID backfillelve). 10 antikvált (7+ napos, nem hozzáférve) hot-tier bejegyzés cold-tierbe mozgatva — mind régi (2026-07-24/25-ös) rutin kanban-audit skip-skill sor. 2 pontos duplikátum-pár (`Mai megbeszelés eredménye`, `Szeretem a kávét`, egyenként 4x) — már cold-tierben ülnek, nincs mozgatandó.
 
 ## 🎯 Top-3 holnapi javaslat
-1. Marveen_Env: #234 (urgent, Kronk) — pending inter-agent üzenet eszkalláció/láthatóság, MÁSODIK egymást követő éjszaka hogy stale-nek jelzem (tegnap 3, ma 4 napja nem mozdult), közben ma megszületett hozzá az alap (#293, Kronk saját diagnózisa a busy-session delivery-lagről) — itt lenne az idő ténylegesen nekifutni, nem csak jelezni.
-2. Marveen_Env: #221 (high, waiting, cuzcoo) — flotta munkakönyvtárak (agents/, store/) kiköltöztetése a marveen repóból, 5 napja áll; technikai adósság ami a jövőbeli upstream sync-eket bonyolíthatja.
-3. Scouts: #142 + #143 (high, planned, Jocoo) — tárolókulcs átvétel + leltár felmérés, 3 hete nincs rajta mozgás; ezek Jocoo saját teendői, nem agent-diszpécselhetők, de érdemes egy fél órát rájuk szánni mielőtt tovább csúsznak.
-
-(Financials-oldalon ma minden kisebb jegy lezárult — #270 adathiányra vár, #232/#254/#259 Jocoo-döntést igényel a scope-hoz, #276/#252/#288 tudatosan szüneteltetve, ezért ma nem szerepelnek a top-3-ban.)
+1. Financials: #299 (Kronk) — kód kész, valós-adat throwaway mind a 4 kritériumon PASS, Kronk go-live terve Jocoo jóváhagyására vár. Ez a leggyorsabban lezárható tétel a táblán.
+2. Marveen_Env: #234 (urgent, Kronk) — pending inter-agent üzenet eszkaláció/láthatóság, ma este ÉLŐ, konkrét bizonyíték gyűlt hozzá (Kronk sessionje ~20+ percig BUSY volt #299 alatt, 6 üzenet torlódott, Kronk többször elavult állapotra reagált) — a jegy napok óta áll, a mai eset erősíti hogy tényleg kellene rá idő.
+3. Financials: #276 (high, waiting, cuzcoo) — Published P&L nincs FY26-ra szűrve (Looker forrás) — a mai Financials-lendületben érdemes lenne ezt is felvenni, mielőtt lehűl a kör.
 
 ## 🌐 External opportunity
-Skip — heti limit nem telt le (utolsó futás 3 napja, a küszöb 7 nap).
+Skip — heti limit nem telt le (utolsó futás 4 napja, a küszöb 7 nap).
 
 ## 🛠 Skill-flotta health
-- `ai-fleet-project-execution`, `github-pr-rebase-merge`, `retrospective`, `skill-management` — HARMADIK egymást követő éjszaka hogy egyetlen `skill_usage` nyomuk sincs ÉS 69+ napja változatlanok. Konzisztens jelzés három éjszakán át egy azóta rendkívül aktív flottánál — ez már érdemi törlés/összevonás-jelölt, nem csak megfigyelés.
-- Új gyanú (csak egyszeri, még nem konzisztens): `marveen-dashboard-deploy` (59 napja változatlan, nincs logolt használat) — figyelemre méltó, de egy éjszaka még nem minta.
+- `ai-fleet-project-execution`, `github-pr-rebase-merge`, `retrospective`, `skill-management` — NEGYEDIK egymást követő éjszaka hogy egyetlen `skill_usage` nyomuk sincs ÉS 70+ napja változatlanok. Ez már a harmadik éjszaka óta "érdemi törlés/összevonás-jelölt" volt — négy éjszaka után ez már nem megfigyelés, hanem ismételt, változatlan jelzés egy döntésre váró tételről.
+- `marveen-dashboard-deploy` (60 napja változatlan, nincs logolt használat) — MÁSODIK egymást követő éjszaka, kezd mintázattá válni.
 
-## ⚠️ Hibák
-Apró korrekció útközben: a task-leírásban javasolt `kanban_cards.seq` SQL-oszlop nem létezik a nyers táblában (`seq` a dashboard API-ban számított mező) — a top-3 buckethez `/api/kanban`-t használtam SQL helyett, minden más lépés zavartalanul lefutott.
-
-*Marveen, 02:41 — most már alszom én is.*
+*Marveen, 02:19 — most már alszom én is.*
