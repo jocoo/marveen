@@ -1,27 +1,22 @@
-# 💭 Dream Engine — 2026-08-10 02:07
+# 💭 Dream Engine — 2026-08-11 02:07
 
 ## 💡 Skill-javaslatok
-Nincs új javaslat. A tegnapi nap kivételesen sűrű volt (Ledger #318 élesítés, FY25 backfill #232, egy éles safety-brake incidens és annak feloldása, Lendi/AI Governance kutatás Chichával), de minden menet közben felmerülő minta már élesben skillbe/memóriába került, nem maradt a Dream Engine-re:
-- `quarantine-reader-allowlist-fallback` (új) — szűk fetch-allowlist miatt általános cégkutatásnál WebSearch kell quarantine-reader helyett.
-- `financials-live-deploy` patch — teljes incidens-eljárás arra, ha a biztonsági fék már megsérült (élesbe írás sign-off előtt).
-- `kronk-deliverable-deploy-cycle` patch — financials-db `node --test`-et használ, nem vitest-et.
-- `marveen-kanban-dispatch-silent-fail` patch — POST-tal `in_progress`-ként született kártyát proaktívan ellenőrizni kell, nem megvárni Jocoo jelzését.
-- `design-mockup-signoff` patch — számozott képsorozat + párhuzamos ellenőrzés több screenshot küldésekor.
+Ma élőben patchelve: `financials-live-deploy` (a #323 ING FY25 reload két incidense — degradált agent-session ami minden SQLCipher-fájlt intermittensen "not a database"-nek mutatott, és egy régi backup ami visszavitte volna a v11 migrációt — mindkettő önálló Buktatók-bejegyzésként rögzítve), `dream-engine` (Jocoo jóváhagyta a napindító/Dream Engine format-javítást). Ezen felül nincs újabb, éjszakai javaslat — a #323-mentén felmerült minták már mind a helyükön vannak.
 
 ## 🧹 Memória-egészség
-924/924 vektorizálva (1 hiányzó ID backfillelve). 2 antikvált (7+ napos, nem hozzáférve) hot-tier bejegyzés cold-tierbe mozgatva (2026-08-01-i Dream Engine/napindító skip-skill jegyzetek). 8 pontos duplikátum-sor (`Szeretem a kávét` ×4, `Mai megbeszélés eredménye` ×4, mind 2026-06-08-i teszt-adat) — már mind cold-tierben, nincs további teendő.
+931/931 vektorizálva (1 hiányzó ID backfillelve). 29 antikvált (7+ napos, nem hozzáférve) hot-tier bejegyzés cold-tierbe mozgatva — jellemzően a 2026-08-02/03-i lezárt Financials UI queue-sor (#245/#246/#253) skip-skill és QUEUE-jegyzetei. 8 pontos duplikátum-sor (`Szeretem a kávét` ×4, `Mai megbeszélés eredménye` ×4, mind 2026-06-08-i teszt-adat) — már mind cold-tierben, nincs további teendő.
 
 ## 🎯 Top-3 holnapi javaslat
-1. Financials: #320 (Ledger saját-címke elsődleges megjelenítés) + #321 (törölt _General felülírásnál a stale merchant nem áll vissza) — a tegnapi #232/D4 elemzés (Yzma mérése alapján) közvetlen, kész-scope-ú folytatása, Kronknál a terv már megvan, dispatch nélkül várnak.
-2. Marveen_Env: #234 (urgent, még mindig nincs dispatchelva) — pending inter-agent üzenet eszkaláció/láthatóság. A tegnapi #232 incidens (Kronk élesbe írt sign-off előtt egy félreérthető köztes üzenet miatt) élesben megmutatta pont azt a hiányt, amit ez a kártya orvosolna — nagyobb súlyú, mint tegnap volt.
-3. Financials: #276 (Published P&L nem FY26-ra szűrt a Looker-forrásban, high, waiting rajtam) — tegnap felajánlva Jocoonak, még nincs válasz; a Financials-fókuszú hét miatt érdemes újra felszínre hozni.
+1. Marveen_Env: #234 (urgent, Kronk, még mindig planned, nincs dispatchelva) — pending inter-agent üzenet eszkaláció/láthatóság. Ez a legmagasabb prioritású nyitott kártya a teljes táblán, és már többedik éjszaka vár dispatch nélkül.
+2. Financials: #276 (Published P&L nem FY26-ra szűrt a Looker-forrásban, high, waiting rajtam) — a #323-incidens lezárult, a Financials-figyelem most warm, érdemes visszahozni mielőtt megint elalszik.
+3. Financials: `/api/report/pnl?source=derived|published` + scope-tisztázás (normal, Kronk, planned) — a mai #323 momentum természetes folytatása, Kronknál a kontextus még friss.
 
 ## 🌐 External opportunity
-Skip — heti limit nem telt le (utolsó futás 6 napja, a küszöb 7 nap).
+[alirezarezvani/claude-skills](https://github.com/alirezarezvani/claude-skills) — 345 skill/plugin/agent-sablon (30+ agent, 70+ custom command), ~23.9k star, aktívan bővül. Relevánsabb mint egy átlag "awesome list": engineering/marketing/finance/productivity kategóriákban is van tartalom, ami közvetlenül a flotta jelenlegi mixét fedi (Financials, Chicha marketing, napi-üzemeltetés) — érdemes átnézni van-e átemelhető minta a saját skill-halmazhoz.
 
 ## 🛠 Skill-flotta health
-- `ai-fleet-project-execution`, `github-pr-rebase-merge`, `retrospective`, `skill-management` — HETEDIK egymást követő éjszaka nulla `skill_usage` nyommal. Ez most már inkább döntést igényel mint újabb jelzést: érdemes egyszer kézzel átnézni és lezárni (megtartás/összevonás/törlés), a napi újra-felszínre-hozás önmagában nem visz előre.
-- `marveen-dashboard-deploy` — ÖTÖDIK egymást követő éjszaka nulla önálló hívással. Megjegyzés változatlan: más skillek (pl. `kronk-deliverable-deploy-cycle`, 18 saját használati nyom) kompozit módon hivatkozzák rá, a "nincs önálló hívás" itt nem feltétlenül elavulás.
-- `kanban-to-trello-migration` (új jelzés) — mtime 32 nap, egyetlen `skill_usage` rekord sincs rá. Egy konkrét, valószínűleg már lezajlott egyszeri migrációra készült; ha az a projekt lezárult, törlésre jelölhető.
+- `ai-fleet-project-execution`, `github-pr-rebase-merge`, `retrospective`, `skill-management` — 8. egymást követő éjszaka nulla `skill_usage` nyommal. A tegnapi javaslat áll: egy kézi triázs (megtartás/összevonás/törlés) többet érne mint a napi újra-jelzés.
+- `marveen-dashboard-deploy` — 6. egymást követő éjszaka nulla önálló hívással, de más skillek (pl. `kronk-deliverable-deploy-cycle`, jelenleg 19 saját nyom) kompozit módon hivatkozzák rá — ez önmagában nem elavulás jele.
+- `kanban-to-trello-migration` — 2. éjszaka nulla `skill_usage`-gal. Ha az eredeti egyszeri migrációs projekt már lezajlott, törlésre jelölhető.
 
-*Marveen, 02:20 — most már alszom én is.*
+*Marveen, 02:26 — most már alszom én is.*
