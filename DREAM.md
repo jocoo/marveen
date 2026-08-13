@@ -1,32 +1,31 @@
-# 💭 Dream Engine — 2026-08-13 02:07
+# 💭 Dream Engine — 2026-08-14 08:52
+
+## ⚠️ Hibák
+A tervezett 02:07-es futás elmaradt (a git history szerint az utolsó DREAM.md-commit 2026-08-13-i, a 07:30-as reggeli napindító ezért ma a Dream Engine szekció nélkül ment ki, jelezve hogy utánanézek). A scheduled-task most, 08:52-kor futott le pótlólag -- valószínűleg a scheduler egy kimaradt/késett tüzelést pótolt be, nem találtam nyomát külön hibának (DB-lock, hiányzó embedding modell) ami megmagyarázná az elmaradást. Érdemes figyelni hogy megismétlődik-e.
 
 ## 💡 Skill-javaslatok
 
-Rendkívül aktív nap volt — 9 skill élőben patchelve/létrehozva a heartbeat-ciklusokban, plusz 1 scheduled-task skill:
-- `relay-compression-precision` (ÚJ) — saját tömörítési hiba (recon_date+purpose → csak recon_date), Jocoo kifogta.
-- `telegram-doc-link-autolink-trap` — kód-blokk + próza egy markdownv2 üzenetben → escapelés-hiba, teljes üzenet elveszett.
-- `financials-db-schema-change` — duplikált read-oldali predikátumok (worklist-widget vs. Ledger-szűrő) ugyanarra az üzleti szabályra.
-- `financials-live-deploy` — két migráció (v12+v13/v14) egy migrate-futásban, csak az egyikre szólt a jóváhagyás.
-- `financials-ui-bug-from-screenshot` — feature-kártya téves premisszával (törlés-UI "hiányzik", pedig már élt).
-- `kronk-deliverable-deploy-cycle`, `sheets-restructure-write`, `scouts-trello-project-update` — Scouts 40th projekt közben.
-- `kanban-audit` (scheduled-task) — `UPDATE ... SELECT changes()` külön sqlite3-hívásban megbízhatatlan.
+Ma reggel (08-14, a reggeli-napindito futása közben) élőben patchelve: `reggeli-napindito` SKILL.md -- dokumentáltam a mai session-szintű MCP-kiesést (gmail/calendar/drive/trello/playwright egyszerre hiányzott) és a fenti Dream Engine-elmaradást, mint az 5. ill. 2. ismétlődő előfordulást.
 
-Ezen felül nincs újabb, éjszakai javaslat — a nap szinte minden felmerülő mintája már menet közben skillbe/memóriába került.
+Ezen felül a tegnapi (08-13) memóriákban 6 skip-skill döntés + 1 memória-patch (`reference-financials-kanban-api-endpoints` bővítve a `/api/kanban/:id/move` status-only mechanikával, #344 kapcsán) történt, új skill létrehozása nélkül -- minden esetben a meglévő skillek lefedték a helyzetet. Nincs új, skill-be kívánkozó minta.
 
 ## 🧹 Memória-egészség
-980/980 vektorizálva (nincs hiányzó embedding). 33 antikvált (7+ napos, nem hozzáférve) hot-tier bejegyzés cold-tierbe mozgatva — a 2026-08-05-i lezárt Coles #238-sorozat és a hozzá kapcsolódó skip-skill/deploy bejegyzések. 8 pontos duplikátum találva (`Szeretem a kávét` × 4, `Mai megbeszélés eredménye` × 4) — ezek már réges-régi (id 36-43), láthatóan korai teszt-adatok, már cold-tierben, nincs további teendő.
+995/995 vektorizálva (nincs hiányzó embedding). 18 antikvált (7+ napos, nem hozzáférve) hot-tier bejegyzés cold-tierbe mozgatva -- a 2026-08-06/07-i lezárt kártya-státusz és skip-skill bejegyzések (Dream Engine/kanban-audit rutinfutások, #270/#294/#296/#299 lezárások). 8 pontos duplikátum találva (`Szeretem a kávét` × 4, `Mai megbeszélés eredménye` × 4) -- ugyanaz a régi (id 36-43) teszt-adat mint tegnap, már cold-tierben, nincs további teendő.
 
 ## 🎯 Top-3 holnapi javaslat
-1. Financials: #340 (Card settlement tick/untick írás-végpontok) — a #338 reconciliation-funkció lezárása, friss lendülettel, ma 5 commit + teljes élesítés előzte meg.
-2. Scouts: #328 (40th Anniversary social media terv, urgent, waiting) — a legmagasabb prioritású nyitott tétel, a tegnapi Matt-meeting utáni aktív szakaszból.
-3. Marveen_Env: #234 (pending inter-agent message eszkaláció/láthatóság, urgent) — még el sem indult urgent infra-tétel.
+1. Financials: #276 (Published P&L nem FY26-ra szűrt, Looker forrás) -- high prioritású, waiting; a #288 már javította a belső /report/pnl végpont címkézését, de a Looker-forrású publikált nézet még nyitott, friss financials-lendülettel érdemes folytatni.
+2. Scouts: #328 (40th Anniversary social media terv, urgent, waiting) -- továbbra is a legmagasabb prioritású nyitott tétel.
+3. Marveen_Env: #234 (pending inter-agent message eszkaláció/láthatóság, urgent) -- még mindig el sem indult urgent infra-tétel.
+
+(A tegnapi lista #340-es tétele időközben élesítve+lezárva, ezért nem szerepel újra.)
 
 ## 🌐 External opportunity
-Skip — a heti rate-limit még nem telt le (utolsó futás 2 napja).
+Skip -- a heti rate-limit még nem telt le (utolsó futás 3 napja).
 
 ## 🛠 Skill-flotta health
-- `ai-fleet-project-execution`, `github-pr-rebase-merge`, `retrospective`, `skill-management` — 10. egymást követő éjszaka nulla `skill_usage` nyommal (tegnap már 9. volt, a kézi triázs-javaslat továbbra is áll, nem ismétlem újra a részleteket).
-- `kanban-to-trello-migration` — 4. egymást követő éjszaka nulla. Ha az eredeti egyszeri migrációs projekt lezajlott, törlésre jelölhető.
-- A mai teljesebb végigpásztázás (mtime 30+ nap, 21 jelölt) 18 nulla-találatos skillt hozott ki, jóval többet mint amit eddig egyenként követtünk — érdemes lehet egy egyszeri, teljes kézi audit-kört tartani a nem-pinned skillek felett, ahelyett hogy éjszakánként csak néhányat emelnénk ki.
+- `ai-fleet-project-execution`, `github-pr-rebase-merge`, `retrospective`, `skill-management` -- immár 11. egymást követő alkalommal nulla `skill_usage` nyom. Ez átlépte a saját 6+ éjszakás szabályt: érdemes döntést hozni (töröld, vagy tudatosan tartsd meg ritkán-de-szándékosan használt eszközként), ne csak újra megemlíteni.
+- `kanban-to-trello-migration` -- 5. egymást követő alkalommal nulla. Ha az eredeti egyszeri migrációs projekt lezajlott, törlésre jelölhető.
+- Új egyedi jelölt a mai szélesebb pásztázásból: `skill-factory` -- 0 `skill_usage`, mtime 30+ nap.
+- Másodszor egymás után ugyanaz a következtetés: egy egyszeri, teljes kézi audit-kör a nem-pinned skillek felett (ma is 18/22 mtime-jelölt nulla-találatos) hasznosabb lenne mint az éjszakai részleges kiemelés.
 
-*Marveen, 02:09 — most már alszom én is.*
+*Marveen, 08:56 -- most már alszom én is (bár épp csak most keltem).*
