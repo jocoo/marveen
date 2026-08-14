@@ -127,6 +127,15 @@ export function startWebServer(port = 3420): http.Server {
     }
     if (method === 'OPTIONS') { res.writeHead(204); res.end(); return }
 
+    // Public, unauthenticated liveness probe for external health-checkers
+    // (e.g. the HomeLab Homepage dashboard widget hitting /api/health over
+    // Tailscale). Returns only {status:"ok"} -- no sensitive data -- so it
+    // needs neither a Bearer token nor an allowlisted origin. Kept ahead of
+    // the auth gate so /api/* Bearer enforcement is otherwise unchanged.
+    if (path === '/api/health' && method === 'GET') {
+      return json(res, { status: 'ok' })
+    }
+
     // Block state-changing requests from browsers running on foreign origins.
     // Same-origin fetches (Origin absent, allowlisted, or matching the host the
     // server was actually reached on -- e.g. a Tailscale Serve / reverse-proxy
