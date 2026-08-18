@@ -29,6 +29,18 @@ describe('kanbanMoveInstructions', () => {
     expect(out).toContain('"author":"cody"')
   })
 
+  // Without an actor the board cannot tell a self-pickup from an assignment, so
+  // every move curl the agent is handed names the agent as the mover -- including
+  // the in_progress self-pickup, which is the one the dispatcher used to echo back.
+  it('names the agent as the actor on every move it is told to make', () => {
+    const out = kanbanMoveInstructions('abc123', 'cody')
+    // Our fork never tells a sub-agent to self-close to done (notify-before-done),
+    // so the actored moves it IS handed are the waiting branch and the in_progress
+    // self-pickup -- both carry the actor (upstream #877, to stop the self-dispatch echo).
+    expect(out).toContain('"status":"waiting","actor":"cody"')
+    expect(out).toContain('"status":"in_progress","actor":"cody"')
+  })
+
   it('keeps the bearer token out of the message (reads it at run time)', () => {
     const out = kanbanMoveInstructions('abc123', 'cody')
     expect(out).toContain('$(cat ')
