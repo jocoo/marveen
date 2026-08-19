@@ -1,32 +1,32 @@
-# 💭 Dream Engine — 2026-08-19 02:07
+# 💭 Dream Engine — 2026-08-20 02:07
 
 ## 💡 Skill-javaslatok
 
-Ma (08-18/19) élőben patchelve/létrehozva rengeteg -- a nap dominánsan egyetlen nagy szálra ment (Financials titkosítás #362-367 + Surface screen-off #369 + éjszakai Surface-crash + marveen upstream sync #370), minden felmerülő minta menet közben skillbe/memóriába került:
+Ma élőben létrehozva/patchelve:
 
-- `financials-db-external-tool-access` -- ötször átírva egy nap alatt, ahogy a gyökérok pontosodott (SQLiteStudio → DBeaver+Willena workaround → végül a valódi, éles fix: a DB legacy=4-re migrálva, DB Browser alapból működik). A korábbi, meghaladott javaslatok explicit "történeti" jelöléssel maradtak a fájlban, nem törölve.
-- `financials-live-deploy` -- két új buktató: backup-keygen orphan-pubkey kezelés, és egy súlyos tanulság finomítása (kulcs-expozíció esetén ne rotálj automatikusan, mérd fel a tényleges kitett entrópiát -- Jocoo jogos korrekciója után).
-- **Új skill**: `verify-correct-instance-before-diagnosing` -- egy téves "böngésző-cache" diagnózisból, ami valójában két külön HomeLab-példány (WSL vs. docker01/Proxmox) összekeveréséből fakadt.
-- **Új skill**: `surface-proxmox-i915-fragility` -- a Surface Pro 3 Proxmox host éjszakai lefagyásából (valószínűleg a #369 kézi tesztelése okozta, gyors képernyő-blank váltogatással).
-- `feedback-security-defaults-check-actual-risk-tolerance` és `feedback-verify-dont-assume` (auto-memory, nem SKILL.md) -- két külön alkalommal bővítve, mindkétszer Jocoo jogos korrekciója után (kutatás nélküli állítás Google Drive-ról, illetve túlreagált rotálási javaslat).
-- Ezen felül nincs újabb, éjszakai javaslat -- a nap anyaga kimerítően fel lett dolgozva élőben.
+- **Új skill**: `financials-watchdog-alert-triage` -- Kronk financials watchdog riasztása (UI health fail loopback+tailscale) egy tranziens konténer-blipnek bizonyult saját méréssel; a skill rögzíti az eljárást (azonnali saját ellenőrzés, docker StartedAt/restart_count, kereszt-visszaigazolás a domain-tulajdonossal, csak flapping esetén eszkalálás Jocoonak).
+- `verify-correct-instance-before-diagnosing` és `gmail-oauth-reauth` -- tovább finomodtak a #372 gmail MCP local-scope override ügy lezárása kapcsán (két takarítási kör, session-restart-verifikáció).
+
+Ezen felül nincs újabb, éjszakai javaslat -- a nap anyaga (financials watchdog transiens, #372 lezárása) élőben feldolgozásra került.
 
 ## 🧹 Memória-egészség
 
-1099 / 1099 vektorizált (100%, backfill nem kellett). 8 antikvált (7+ napos, nem hivatkozott) hot-tier memória cold-tier-be mozgatva. Talált 2 pontos duplikátum-pár (`"Szeretem a kavét"` és `"Mai megbeszelés eredménye"`, egyenként 4-4 példány) -- ezek már korábban is cold-tier-ben voltak, valószínűleg 2026-06-08-i rendszer-teszt maradványai, nem valódi tartalom. Nem törölve, csak jelezve.
+1113 / 1113 vektorizált (1 hiányzó pótolva backfill-lel). 11 antikvált (7+ napos, nem hivatkozott) hot-tier memória cold-tier-be mozgatva. A már ismert 2 pontos duplikátum-pár (`"Szeretem a kavét"`, `"Mai megbeszeles eredmenye"`, egyenként 4-4 példány) továbbra is cold-tier-ben, nincs változás -- nem törölve, csak jelezve.
 
 ## 🎯 Top-3 holnapi javaslat
 
-1. HomeLab: #371 (Surface Proxmox host helyreállítása) -- az éjszaka leállt gép, Jocoo reggeli power-cycle-je + Kronk hálózat-ellenőrzése után zárható, ez a legfrissebb és legkonkrétabb nyitott tétel.
-2. Marveen_Env: #234 (pending inter-agent message eszkaláció/láthatóság, urgent) -- 17 napja nyitva magas prioritással, Yzma diagnózisa (elveszett retry a "busy" WARN után) megvan, de a tényleges javítás még nem történt meg.
-3. Scouts: #328 (40th Anniversary social media terv, urgent, Matt emailje alapján) -- aktív, Chicha-nál fut, a legutóbbi mozgás 08-12-én volt.
+1. HomeLab: #369 (Surface képernyő-elsötétülés regresszió) -- aktív, Kronknál fut, ma új hazárd is előkerült (Surface Pro 3 host lefagyás fb0/blank szoros ciklusú váltogatásnál, i915 GPU-hang), a javítás még nincs lezárva.
+2. Marveen_Env: #234 (pending inter-agent message eszkaláció/láthatóság, urgent) -- 18 napja nyitva magas prioritással, Yzma diagnózisa megvan (elveszett retry a "busy" WARN után), a tényleges javítás még mindig nem történt meg.
+3. Scouts: #328 (40th Anniversary social media terv, urgent, Matt emailje alapján) -- Chicha-nál, legutóbbi mozgás 08-12-én, érdemes rákérdezni válaszolt-e már Matt.
+
+(#276, Financials Published P&L Looker-szűrés, kimaradt a listából annak ellenére hogy high priority: Jocoo 2026-08-05-én explicit megállította, "nem fontos most", a döntés érvényben marad, Ő hozza elő ha aktuális lesz.)
 
 ## 🌐 External opportunity
 
-Lefutott a heti keresés (multi-agent fleet orchestration/reliability témában, mivel ez illik a Marveen-flotta jelenlegi profiljához). A legrelevánsabbnak tűnő találat (`oguzhnatly/fleet`) ellenőrzésre nem felelt meg a szűrésnek: mindössze 12 csillag és utolsó commit 2026 májusában -- a 100 csillag / 90 napos aktivitás küszöböt egyik sem teljesíti. Más újonnan felbukkant, releváns repót nem találtam. Nincs ajánlás ma éjjel.
+Skip -- heti limit nem telt le (utolsó futás 2026-08-19, kevesebb mint 7 nap telt el).
 
 ## 🛠 Skill-flotta health
 
-Négy skill (`ai-fleet-project-execution`, `github-pr-rebase-merge`, `retrospective`, `skill-management`) immár 13. egymást követő éjszaka nulla `skill_usage` -- a döntési küszöb régóta, nagyon átlépve. `kanban-to-trello-migration` 7. egymást követő éjszaka nulla. Tágabb pásztázásban ma is 26/33 mtime-jelölt nulla-találatos. Ez már a negyedik éjszaka ugyanazzal a következtetéssel: egy egyszeri kézi audit-kör (törlés vagy tudatos megtartás döntése ezekre a régóta használatlan skillekre) hasznosabb lenne mint az éjszakai ismételt részleges kiemelés -- ezt a bucket-et a továbbiakban nem bővítem tovább napi szinten, amíg erről nem születik döntés.
+Négy skill (`ai-fleet-project-execution`, `github-pr-rebase-merge`, `retrospective`, `skill-management`) immár 14. egymást követő éjszaka nulla `skill_usage`, `kanban-to-trello-migration` 8. egymást követő éjszaka nulla -- mindkettő régóta a döntési küszöb felett, a tegnapi döntés szerint ezt a bucket-et nem bővítem tovább napi részletezéssel, amíg nem lesz kézi audit-kör. Tágabb pásztázásban ma is 27/34 mtime-jelölt nulla-találatos, nincs változás a trendhez képest.
 
 *Marveen, 02:2x -- most már alszom én is.*
