@@ -11190,6 +11190,58 @@ async function ensureMarveenLoaded() {
 async function loadMessagesPage() {
   await ensureMarveenLoaded()
   await loadChatAgentList()
+  loadMessageBacklog()
+}
+
+// Per-agent inter-agent message backlog: how many messages are waiting for each
+// agent and how long the oldest has been queued. Card 74d3ca3e: a message can
+// sit pending behind a long turn without the sender or receiver noticing, so the
+// congestion has to be VISIBLE before it gets mistaken for lost mail. Data comes
+// from /api/messages/backlog (getPendingBacklogByAgent). Read-only banner: it
+// never touches the queue, only surfaces it.
+async function loadMessageBacklog() {
+  const container = document.getElementById('messageBacklogSection')
+  if (!container) return
+  try {
+    const res = await fetch('/api/messages/backlog')
+    if (!res.ok) { container.hidden = true; return }
+    const rows = await res.json()
+    renderMessageBacklog(container, Array.isArray(rows) ? rows : [])
+  } catch (err) {
+    console.error('Message backlog betöltés hiba:', err)
+    container.hidden = true
+  }
+}
+
+function renderMessageBacklog(container, rows) {
+  if (!rows.length) {
+    container.hidden = true
+    container.innerHTML = ''
+    return
+  }
+  container.hidden = false
+  const items = rows.map(r => `
+    <div class="pending-retry-row">
+      <div class="pending-retry-info">
+        <div class="pending-retry-title">
+          ${escapeHtml(chatDisplayName(r.agent))}
+          <span class="badge badge-paused">${t('messages.backlog.count', { n: r.pending })}</span>
+        </div>
+        <div class="pending-retry-meta">
+          <span>${t('messages.backlog.oldest', { age: formatPendingAge((r.oldestAgeSeconds || 0) * 1000) })}</span>
+        </div>
+      </div>
+    </div>
+  `).join('')
+  container.innerHTML = `
+    <div class="pending-retries-banner">
+      <div class="pending-retries-header">
+        <span class="pending-retries-title">${t('messages.backlog.title', { n: rows.length })}</span>
+        <span class="pending-retries-hint">${t('messages.backlog.hint')}</span>
+      </div>
+      <div class="pending-retries-list">${items}</div>
+    </div>
+  `
 }
 
 const CHAT_SYSTEM_AGENTS = new Set(['heartbeat','telegram-coordinator','channel-coordinator'])
@@ -11692,6 +11744,7 @@ async function sendChatMessage(toAgent) {
 
 document.getElementById('chatRefreshBtn')?.addEventListener('click', () => {
   loadChatAgentList()
+  loadMessageBacklog()
   if (chatSelectedAgent) loadChatThread(chatSelectedAgent)
 })
 

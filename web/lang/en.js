@@ -1117,6 +1117,10 @@ window._i18n.en = {
   'messages.error_send':         'Error: {msg}',
   'messages.loading_indicator':  'Loading...',
   'messages.sidebar_error':      'Error: {msg}',
+  'messages.backlog.title':      'Pending messages ({n} agent(s))',
+  'messages.backlog.hint':       'These inter-agent messages are waiting to be delivered because the target is busy. Not lost, just not read yet.',
+  'messages.backlog.count':      '{n} message(s)',
+  'messages.backlog.oldest':     'oldest: {age}',
   'messages.conv.reply_label':   'reply',
   'messages.conv.search_placeholder': 'Search in conversation…',
 

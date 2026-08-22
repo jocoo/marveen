@@ -17,7 +17,7 @@ import {
 import { isQualifiedId } from './federation/address.js'
 import { sendFederatedMessage } from './federation/bridge.js'
 import { getFederationConfig, abandonWindowMsForPeer } from './federation/config.js'
-import { readAgentRemoteHost, readAgentVoiceConfig } from './agent-config.js'
+import { readAgentRemoteHost, readAgentVoiceConfig, isKnownAgent } from './agent-config.js'
 import {
   agentSessionName,
   isSessionReadyForPrompt,
@@ -57,6 +57,28 @@ const routerLoggedMisses: Set<number> = new Set()
 // the orchestrator, so a handoff failure is never silent.
 const routerInjectFailures: Map<number, number> = new Map()
 const MAX_INJECT_FAILURES = 3
+
+// ---- sender-stall heads-up (card 74d3ca3e) ----------------------------------
+// The router already surfaces a TERMINAL delivery failure (abandon after the
+// full 60-min window, or inject-exhaustion) to the owner + main agent, and a
+// systemic stall (a session continuously not-ready) to the main agent. What it
+// did NOT do was tell the SENDER that a specific message it queued has not yet
+// been read while the target works through a long turn. The 2026-08-23 incident
+// (Yzma's corrections to Kronk sat pending behind a long turn; Kronk reversed
+// two domain decisions because it acted before they landed) is exactly that
+// blind spot: the sender assumed hand-off == delivered.
+//
+// Fix: once a still-pending message crosses SENDER_STALL_NOTICE_MS, drop ONE
+// soft heads-up into the SENDER's own inbox ("your msg #id is still queued, the
+// target is busy, do not assume it was read"). It is a visibility signal only:
+// the notice is a normal inbox message the router delivers to the sender in its
+// OWN idle gap, so it never touches or interrupts the busy target's active
+// session. One notice per message id (tracked in-memory like routerLoggedMisses
+// / routerInjectFailures / agentStuckSince); the systemic stuck-session alert
+// (10/30 min -> main agent) and the terminal abandon (60 min -> owner) remain
+// the later, heavier layers.
+const senderStallNotified = new Set<number>()
+export const SENDER_STALL_NOTICE_MS = 5 * 60 * 1000
 
 /**
  * Pure decision: has a message exhausted its tmux-inject retries?
@@ -163,6 +185,72 @@ export function buildFailureNotificationText(from: string, to: string, content: 
     ? previewLine.slice(0, PREVIEW_MAX_CHARS - 3) + '...'
     : previewLine
   return `${from} uzenete nem ert celba (-> ${to}): "${preview}". Kerlek ertesitsd ujra. (failure: ${reason})`
+}
+
+/**
+ * Pure decision: should the SENDER get a one-time "still pending" heads-up?
+ *
+ * Fires only when ALL hold:
+ *   - the message has been pending longer than `thresholdMs`;
+ *   - no heads-up has gone out for it yet (`alreadyNotified` false);
+ *   - it is a real agent-to-agent message: sender != receiver (a self-message
+ *     needs no notice), sender is not the synthetic `system` id (its notices
+ *     must never themselves spawn notices -- recursion guard), and the sender
+ *     is an addressable fleet agent (`senderIsAddressable`). The last check also
+ *     drops channel-inbound rows: a user message arrives with a coordinator id
+ *     as `from`, which is not a known agent, so a stalled user message never
+ *     tries to notify the coordinator.
+ *
+ * The in-memory `alreadyNotified` flag (not a DB column) matches the rest of the
+ * router's per-tick escalation state, which is intentionally reset on restart:
+ * one duplicate heads-up after a dashboard restart is strictly better than a
+ * schema migration for a soft, non-terminal signal.
+ */
+export function shouldNotifySenderOfStall(
+  ageMs: number,
+  thresholdMs: number,
+  alreadyNotified: boolean,
+  fromAgent: string,
+  toAgent: string,
+  senderIsAddressable: boolean,
+): boolean {
+  if (alreadyNotified) return false
+  if (ageMs <= thresholdMs) return false
+  if (fromAgent === toAgent) return false
+  if (fromAgent === 'system') return false
+  if (!senderIsAddressable) return false
+  return true
+}
+
+// Build the sender heads-up text. Extracted + exported so the wording (and the
+// "do not assume it was read" framing that is the whole point) is unit-testable
+// without the DB round-trip. Preview is the first non-empty line, capped so the
+// notice stays a single actionable line.
+export function buildSenderStallNotice(msgId: number, toAgent: string, ageMs: number, content: string): string {
+  const min = Math.max(1, Math.round(ageMs / 60000))
+  const firstNonEmpty = (content || '').split('\n').find((l) => l.trim()) ?? ''
+  const previewLine = firstNonEmpty.trim()
+  const preview = previewLine.length > PREVIEW_MAX_CHARS
+    ? previewLine.slice(0, PREVIEW_MAX_CHARS - 3) + '...'
+    : previewLine
+  return `[message-pending] Az üzeneted (#${msgId}) -> ${toAgent} még mindig kézbesítésre vár (${min} perce, a cél épp dolgozik). ` +
+    `Nem veszett el és a rendszer tovább próbálkozik, de a cél MÉG NEM olvasta -- ne feltételezd hogy megkapta. ` +
+    `Ha idő-kritikus korrekció, várd meg a választ/[Eredmény]-t mielőtt továbblépsz. Előnézet: "${preview}"`
+}
+
+// Enqueue the sender heads-up (one per message id). The notice is a LOCAL
+// 'system' -> sender row: system owns no session so it can never loop back
+// through this path, and the sender receives it in its own idle gap -- the busy
+// target is never touched. Marks the id notified only after the row is created,
+// so a create failure retries next tick.
+function notifySenderOfStall(msg: AgentMessage, ageMs: number): void {
+  try {
+    createAgentMessage('system', msg.from_agent, buildSenderStallNotice(msg.id, msg.to_agent, ageMs, msg.content))
+    senderStallNotified.add(msg.id)
+    logger.info({ id: msg.id, from: msg.from_agent, to: msg.to_agent, ageMs }, 'message-router: sender-stall heads-up enqueued')
+  } catch (err) {
+    logger.warn({ err, id: msg.id }, 'message-router: sender-stall heads-up could not be created')
+  }
 }
 
 // Fire the owner-alert without blocking the router loop. Caller is
@@ -593,7 +681,23 @@ export async function runMessageRouterTick(): Promise<void> {
         notifyOrchestratorOfFailedHandoff(msg, 'target session was absent for the entire retry window')
         routerInjectFailures.delete(msg.id)
         routerLoggedMisses.delete(msg.id)
+        senderStallNotified.delete(msg.id)
         continue
+      }
+
+      // Sender heads-up (card 74d3ca3e): the message is still pending and NOT
+      // being abandoned this tick. If it has waited past the notice threshold,
+      // tell the sender ONCE that it has not been read yet. Runs before the
+      // busy/absent branch split so it covers both a mid-turn-busy target and a
+      // briefly-absent one -- either way the sender is blind. Pure-decision +
+      // isKnownAgent gate here; the main-agent PULL path above already
+      // `continue`d, so this never fires for main-agent-bound mail.
+      // Cheap gates (age + already-notified) short-circuit BEFORE the
+      // isKnownAgent registry lookup, so a fresh message on a busy tick never
+      // pays for it -- and the pure gate below re-checks the same conditions.
+      if (ageMs > SENDER_STALL_NOTICE_MS && !senderStallNotified.has(msg.id)
+          && shouldNotifySenderOfStall(ageMs, SENDER_STALL_NOTICE_MS, false, msg.from_agent, msg.to_agent, isKnownAgent(msg.from_agent))) {
+        notifySenderOfStall(msg, ageMs)
       }
 
       if (!sessionExists) {
@@ -681,6 +785,7 @@ export async function runMessageRouterTick(): Promise<void> {
           logger.warn({ id: msg.id }, 'markMessageFailed affected 0 rows (deleted concurrently?)')
         }
         routerLoggedMisses.delete(msg.id)
+        senderStallNotified.delete(msg.id)
         continue
       }
       const { category, safeFrom: safeFromAgent } = cls
@@ -752,6 +857,7 @@ export async function runMessageRouterTick(): Promise<void> {
         }
         routerInjectFailures.delete(msg.id)
         routerLoggedMisses.delete(msg.id)
+        senderStallNotified.delete(msg.id)
         logger.info({ id: msg.id, from: msg.from_agent, to: msg.to_agent, category, traceId: traceCtx?.trace_id }, 'Agent message delivered')
       } catch (err) {
         // An inject throw is usually transient (pane un-ready at the instant of
@@ -774,6 +880,7 @@ export async function runMessageRouterTick(): Promise<void> {
         notifyOrchestratorOfFailedHandoff(msg, `tmux inject failed ${failCount}x`)
         routerInjectFailures.delete(msg.id)
         routerLoggedMisses.delete(msg.id)
+        senderStallNotified.delete(msg.id)
       }
       } catch (err) {
         logger.warn({ err, id: msg.id, to: msg.to_agent }, 'Agent message processing threw; marking failed so the queue cannot wedge')
@@ -781,6 +888,7 @@ export async function runMessageRouterTick(): Promise<void> {
           logger.warn({ id: msg.id }, 'markMessageFailed affected 0 rows (deleted concurrently?)')
         }
         routerLoggedMisses.delete(msg.id)
+        senderStallNotified.delete(msg.id)
       }
     }
 

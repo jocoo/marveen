@@ -964,6 +964,10 @@ window._i18n.hu = {
   'messages.error_send':         'Hiba: {msg}',
   'messages.loading_indicator':  'Betöltés...',
   'messages.sidebar_error':      'Hiba: {msg}',
+  'messages.backlog.title':      'Függőben lévő üzenetek ({n} ügynöknél)',
+  'messages.backlog.hint':       'Ennyi inter-agent üzenet vár kézbesítésre, mert a cél épp dolgozik. Nem veszett el, csak még nem olvasták.',
+  'messages.backlog.count':      '{n} üzenet',
+  'messages.backlog.oldest':     'legrégebbi: {age}',
   'messages.conv.reply_label':   'válasz',
   'messages.conv.search_placeholder': 'Keresés a beszélgetésben…',
 
