@@ -172,6 +172,27 @@ async function checkSession(label: string, session: string): Promise<void> {
   const pane = capturePane(session)
   const sig = pane == null ? null : stuckToolCallSignature(pane)
 
+  // Residual-footer early clear (#376). A completed turn leaves a frozen
+  // "<verb> for Ns" footer that is indistinguishable from a wedge by the
+  // counter alone; the discriminator is the input box -- a residual sits at the
+  // idle ❯ prompt, a genuine mid-turn wedge does not. Before this, the idle
+  // check ran ONLY at the freeze threshold, so a residual could age the full
+  // 180s and then get respawned by the ONE poll that happened to catch the pane
+  // briefly non-idle (an injected message, a transient) -- exactly the
+  // 10:56 / 11:25 / 20:27 (2026-08-23) respawns, all on a "brewed for Ns"
+  // residual, and 11:25 had NO recent wakeup for the narrower wakeup guard to
+  // catch. Clear any building spell the instant ANY poll sees the pane idle, so
+  // a residual can never reach the freeze threshold. A genuine wedge never shows
+  // the idle prompt, so it is untouched (detectPaneState is the same trusted
+  // signal the recovery-time guard already relies on).
+  if (pane != null && detectPaneState(pane) === 'idle') {
+    if (watchState.has(session)) {
+      watchState.delete(session)
+      logger.debug({ label, session }, 'stuck-tool-call-watcher: pane idle -- cleared building spell (residual footer, not a wedge)')
+    }
+    return
+  }
+
   const prev = watchState.get(session) ?? NO_STATE
   const { recover, next } = decideStuckToolCallRecovery(sig, prev, Date.now(), THRESHOLDS)
 
@@ -182,30 +203,16 @@ async function checkSession(label: string, session: string): Promise<void> {
   }
 
   if (recover) {
-    // Idle-prompt guard (2026-06-22 false-positive loop): the signature only
-    // sees a frozen "<verb> for Ns" footer -- it cannot tell an ACTIVELY-wedged
-    // tool-call (the 2026-06-02 incident) from the RESIDUAL footer a COMPLETED
-    // turn leaves on screen while the session sits idle waiting for its next
-    // heartbeat. Both read as a stagnant counter. The discriminator is the input
-    // box: a genuine mid-turn wedge has no ready prompt (detectPaneState != idle,
-    // the box is replaced by the busy/working indicator), whereas a completed
-    // turn's residual sits ABOVE a live `❯` idle prompt. If the pane is idle, the
-    // user can interact -- it is not the user-facing freeze this watcher targets
-    // -- so respawning is pure churn (this is what drove ~150 spurious respawns/
-    // week, each leaving a fresh residual footer that re-armed the loop). Clear
-    // the stale spell so the residual stops re-triggering every poll. Fail-open:
-    // a null pane (capture failed) does NOT block recovery.
-    if (pane != null && detectPaneState(pane) === 'idle') {
-      logger.info(
-        { label, session, tag: next.tag, seconds: next.lastSeconds, spellPeakSeconds: next.spellPeakSeconds },
-        'stuck-tool-call-watcher: counter stagnant but pane is at the idle prompt (residual footer of a completed turn, not a wedge) -- skipping recovery',
-      )
-      watchState.delete(session)
-      return
-    }
+    // NOTE: the idle-prompt discriminator (residual footer of a COMPLETED turn
+    // sits above a live `❯` prompt; a genuine mid-turn wedge does not) now runs
+    // as the residual-footer early clear at the TOP of checkSession, on EVERY
+    // poll -- so a residual is cleared long before it reaches the freeze
+    // threshold, and any spell that survives to here was NON-idle on this poll.
+    // The guards below cover the cases where the pane is non-idle yet still not
+    // a wedge (an inbound message in flight).
     // Parked-channel-input guard (2026-08-15, owner-observed false positive).
-    // The idle-prompt guard above is the ONLY thing holding back a residual
-    // footer -- and it stops holding the instant an inbound channel message is
+    // The early idle-clear holds back a residual footer WHILE the pane is idle
+    // -- but it stops applying the instant an inbound channel message is
     // injected into the prompt box, because detectPaneState then reads 'typing',
     // not 'idle'. Measured sequence that day: the counter had been frozen at 49s
     // since ~14:52 and was correctly skipped as residual at 14:52, 14:56 and
