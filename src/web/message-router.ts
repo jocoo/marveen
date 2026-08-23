@@ -161,6 +161,18 @@ function notifyOrchestratorOfFailedHandoff(msg: AgentMessage, reason: string): v
 let lastMainAgentWakeupMs = 0
 const MAIN_AGENT_WAKEUP_COOLDOWN_MS = 45 * 1000
 
+// Exposed for the stuck-tool-call-watcher (#376): epoch-ms of the last inbox
+// wakeup injected into the MAIN channels session (0 = never). A frozen "<verb>
+// for Ns" TUI counter that predates a recent wakeup is a COMPLETED turn's
+// residual footer, not a wedge -- the session was just handed a message and is
+// about to render the new turn (CPU still low in the gap between injection and
+// turn-start), so the idle/parked-input guards no longer apply but the evidence
+// is stale. The watcher defers on this so it does not respawn the session
+// mid-pickup and drop the just-injected message.
+export function lastMainAgentWakeupAt(): number {
+  return lastMainAgentWakeupMs
+}
+
 // Why an inter-agent message was marked failed. The router only escalates
 // genuine delivery failures (the target was meant to receive it, but never
 // did) -- input-validation failures (empty/malformed from_agent) are a

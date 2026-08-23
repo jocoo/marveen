@@ -5,7 +5,7 @@ import {
   type StuckToolCallState,
   type StuckToolCallThresholds,
 } from '../pane-state.js'
-import { shouldDeferForRecentRespawn, confirmsWedgeProfile } from '../web/stuck-tool-call-watcher.js'
+import { shouldDeferForRecentRespawn, confirmsWedgeProfile, shouldDeferForRecentWakeup } from '../web/stuck-tool-call-watcher.js'
 
 // Thresholds matching the production defaults in stuck-tool-call-watcher.ts.
 // Repeated here so the tests pin the contract independently of the wrapper
@@ -450,5 +450,32 @@ describe('confirmsWedgeProfile (#248 CPU-profile guard)', () => {
 
   it('fails OPEN on a null sample (ps failed) -- never blocks recovery on a missing reading', () => {
     expect(confirmsWedgeProfile(null, MAX)).toBe(true)
+  })
+})
+
+describe('shouldDeferForRecentWakeup (#376 inbox-burst false-positive guard)', () => {
+  const now = 1_000_000_000
+  const GRACE = 90_000
+
+  it('never defers when no wakeup was ever recorded (0)', () => {
+    expect(shouldDeferForRecentWakeup(0, now)).toBe(false)
+  })
+
+  it('defers when a wakeup fired just now', () => {
+    expect(shouldDeferForRecentWakeup(now, now)).toBe(true)
+  })
+
+  it('defers when a wakeup fired 12s ago (the observed false-positive window)', () => {
+    expect(shouldDeferForRecentWakeup(now - 12_000, now)).toBe(true)
+  })
+
+  it('stops deferring once the grace has fully elapsed', () => {
+    expect(shouldDeferForRecentWakeup(now - GRACE, now)).toBe(false)
+    expect(shouldDeferForRecentWakeup(now - (GRACE + 1_000), now)).toBe(false)
+  })
+
+  it('boundary: just inside vs just past the grace', () => {
+    expect(shouldDeferForRecentWakeup(now - (GRACE - 1_000), now)).toBe(true)
+    expect(shouldDeferForRecentWakeup(now - (GRACE + 1), now)).toBe(false)
   })
 })

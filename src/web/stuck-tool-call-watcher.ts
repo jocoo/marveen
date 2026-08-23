@@ -43,6 +43,7 @@ import { resolveFromPath } from '../platform.js'
 import { capturePane } from './agent-process.js'
 import { MAIN_CHANNELS_SESSION } from './main-agent.js'
 import { resumeMarveenSession, sendAlert, lastMainRespawnAt, MARVEEN_POST_RESPAWN_GRACE_MS } from './channel-monitor.js'
+import { lastMainAgentWakeupAt } from './message-router.js'
 import {
   stuckToolCallSignature,
   decideStuckToolCallRecovery,
@@ -68,6 +69,31 @@ const WEDGE_MAX_CPU_PERCENT = 30
 export function confirmsWedgeProfile(cpuPercent: number | null, maxCpuPercent: number): boolean {
   if (cpuPercent === null) return true
   return cpuPercent <= maxCpuPercent
+}
+
+// Recent-inbox-wakeup grace (#376). The message-router injects an inbox wakeup
+// into the main session when inter-agent messages are pending. In the gap
+// between injection and the new turn actually starting to render, CPU is still
+// low and the OLD (completed-turn) residual "<verb> for Ns" footer is still on
+// screen -- while detectPaneState reads busy/typing (message in flight), so
+// neither the idle-prompt nor the parked-input guard applies. That let this
+// watcher respawn a session that had just been handed a message, dropping it
+// (observed 10:56, 11:25, 20:27 on 2026-08-23). Defer recovery while a wakeup
+// is recent: if the session is alive it advances the counter within this window
+// (the spell resets on its own); if it is genuinely wedged the counter stays
+// frozen and recovery fires once the grace lapses. The parked message itself is
+// the stuck-input-watcher's domain, which has its own escalation.
+const WAKEUP_DEFER_MS = 90_000
+
+// Pure: should recovery be deferred because an inbox wakeup was injected into
+// the main session within `graceMs`? lastWakeupMs is lastMainAgentWakeupAt()'s
+// epoch-ms (0 when never). Mirrors shouldDeferForRecentRespawn.
+export function shouldDeferForRecentWakeup(
+  lastWakeupMs: number,
+  nowMs: number,
+  graceMs = WAKEUP_DEFER_MS,
+): boolean {
+  return lastWakeupMs > 0 && nowMs - lastWakeupMs < graceMs
 }
 
 // Recent CPU% of the main session's pane-leader claude (claudePid == panePid for
@@ -197,6 +223,23 @@ async function checkSession(label: string, session: string): Promise<void> {
         'stuck-tool-call-watcher: counter stagnant but an inbound channel message is parked in the prompt (stuck-input-watcher owns this) -- skipping recovery',
       )
       watchState.delete(session)
+      return
+    }
+    // Recent-inbox-wakeup guard (#376): the message-router just injected a
+    // pending-messages wakeup into this session, so a frozen counter that
+    // predates it is a completed-turn residual, not a wedge -- the new turn is
+    // about to render. Defer (keep the spell): a live session advances the
+    // counter within the grace and the spell resets; a truly wedged one stays
+    // frozen and recovers once the grace lapses. NOTE: keep this ABOVE the CPU
+    // guard -- the false-positive fires precisely when CPU is still low (the
+    // injected turn has not started burning yet), so the CPU guard cannot catch
+    // it.
+    const lastWakeup = lastMainAgentWakeupAt()
+    if (shouldDeferForRecentWakeup(lastWakeup, Date.now())) {
+      logger.info(
+        { label, session, sinceWakeupMs: lastWakeup ? Date.now() - lastWakeup : null, graceMs: WAKEUP_DEFER_MS, tag: next.tag, seconds: next.lastSeconds },
+        'stuck-tool-call-watcher: recent inbox wakeup -- deferring recovery (session is picking up an injected message, not wedged)',
+      )
       return
     }
     // Post-respawn grace: defer if a respawn (this watcher, channel-monitor's
