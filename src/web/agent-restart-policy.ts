@@ -172,3 +172,19 @@ export function parseEtimeToSeconds(etime: string): number {
   if (minutes > 59 || seconds > 59) return -1
   return days * 86400 + hours * 3600 + minutes * 60 + seconds
 }
+
+// Should a healthy sweep clear the accumulated restart-failure budget for an
+// agent? A single 'alive' sighting right after a fresh restart is NOT proof of
+// recovery: pre-#375, a poller that briefly appeared in-tree then died or
+// reparented reset the budget every cycle, so the exponential back-off and the
+// AGENT_MAX_RESTART_ATTEMPTS escalation never engaged and idle sub-agents churned
+// unbounded. Require the plugin to have stayed alive for at least `dwellMs`
+// (tracked from the first alive observation of the current up-spell) before the
+// recovery is trusted. `aliveSinceMs` is null when no up-spell is in progress.
+export function shouldClearRestartBudget(
+  aliveSinceMs: number | null,
+  nowMs: number,
+  dwellMs: number,
+): boolean {
+  return aliveSinceMs != null && nowMs - aliveSinceMs >= dwellMs
+}

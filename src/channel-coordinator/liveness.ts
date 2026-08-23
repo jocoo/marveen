@@ -16,6 +16,7 @@ import { PROJECT_ROOT } from '../config.js'
 import { channelStateDir, type ChannelProviderType } from '../channel-provider.js'
 import { agentDir } from '../web/agent-config.js'
 import { matchesProviderPollerCmd } from './provider-poller-match.js'
+import { parsePollerPidsFromPs, STATE_ENV_VAR } from '../web/channel-poller-reap.js'
 
 const TMUX = resolveFromPath('tmux')
 
@@ -161,6 +162,62 @@ export function snapshotProcsWithRetry(
 // must treat 'unknown' as "no information" and leave the agent alone.
 export type PluginLiveness = 'alive' | 'down' | 'unknown'
 
+// Orphan-poller fallback, scoped to THIS agent's channel state dir.
+//
+// decideHasPluginAlive walks the claude process tree (plus the bot.pid + the
+// slack/discord global cmd-scan). It misses a poller that has REPARENTED OUT of
+// the claude tree -- e.g. after a claude re-exec/restart the bun child survives,
+// reparents to init, and is no longer a descendant of claudePid. Such a poller
+// is still fully functional: inbound delivery is inbox/DB + tmux-injection by
+// the message-router (channel-coordinator/ingest.ts), which is independent of
+// the poller's parent. Reaping + fresh-restarting it (the pre-fix behaviour)
+// therefore destroys a healthy session's context for nothing -- the fleet-wide
+// idle-sub-agent restart churn observed after the 2026-08-23 agents/ relocation.
+//
+// The slack/discord global cmd-scan in decideHasPluginAlive is NOT usable for
+// telegram: every telegram sub-agent runs the SAME plugin cmd, so a bare
+// cmd-match would credit ANOTHER agent's poller to this one (the masking gap
+// #338 tightened). Scope by `<PROVIDER>_STATE_DIR=<stateDir>` instead -- exactly
+// how the reaper identifies THIS agent's pollers -- so there is no cross-agent
+// masking. Runs only on the 'down' path (tree-walk + bot.pid already failed),
+// which is rare, so the extra `ps eww -e` is cheap.
+// Pure core (exported for tests, no ps/fs): given a `ps eww -e` snapshot, is any
+// poller whose environment carries `<PROVIDER>_STATE_DIR=<stateDir>` currently
+// alive? Delegates the env-match to the reaper's tested parser so both paths
+// agree on what "this agent's poller" means.
+export function decideOrphanPollerAlive(
+  psEnvOutput: string,
+  providerType: ChannelProviderType,
+  stateDir: string,
+  isPidAlive: (pid: number) => boolean,
+): boolean {
+  const envVar = STATE_ENV_VAR[providerType]
+  if (!envVar) return false
+  const pids = parsePollerPidsFromPs(psEnvOutput, envVar, stateDir)
+  return pids.some((pid) => isPidAlive(pid))
+}
+
+function orphanPollerAliveForStateDir(
+  providerType: ChannelProviderType,
+  stateDir: string,
+  isPidAlive: (pid: number) => boolean,
+): boolean {
+  if (!STATE_ENV_VAR[providerType]) return false
+  let psEnvOutput: string
+  try {
+    psEnvOutput = execFileSync('/bin/ps', ['eww', '-e'], {
+      timeout: 5000,
+      encoding: 'utf-8',
+      maxBuffer: PS_PROBE_MAX_BUFFER,
+    })
+  } catch (err) {
+    // A failed env-scan is no evidence -- fall back to the tree-walk verdict.
+    logger.debug({ err, stateDir, providerType }, 'orphan-poller state-dir env-scan failed (ignored)')
+    return false
+  }
+  return decideOrphanPollerAlive(psEnvOutput, providerType, stateDir, isPidAlive)
+}
+
 export function probeChannelPluginLiveness(
   claudePid: number,
   providerType: ChannelProviderType,
@@ -198,18 +255,31 @@ export function probeChannelPluginLiveness(
       const parsed = parseInt(readFileSync(pidPath, 'utf-8').trim(), 10)
       if (Number.isFinite(parsed)) botPid = parsed
     }
+    const isPidAlive = (pid: number) => {
+      try { process.kill(pid, 0); return true } catch { return false }
+    }
     const alive = decideHasPluginAlive({
       psOutput,
       claudePid,
       providerType,
       botPid,
       agentName,
-      isPidAlive: (pid) => {
-        try { process.kill(pid, 0); return true } catch { return false }
-      },
+      isPidAlive,
       debugLog: (event, fields) => logger.debug(fields, event),
     })
-    return alive ? 'alive' : 'down'
+    if (alive) return 'alive'
+    // Tree-walk + bot.pid say down. Before restarting, check for a poller that
+    // reparented out of the claude tree but is still bound to THIS agent's state
+    // dir and alive -- it is still delivering via the inbox, so 'down' would be a
+    // false verdict that churns a healthy session.
+    if (orphanPollerAliveForStateDir(providerType, stateDir, isPidAlive)) {
+      logger.debug(
+        { claudePid, agentName, providerType, stateDir },
+        'channel-plugin alive via state-dir-scoped orphan poller (reparented out of claude tree, still serving inbox)',
+      )
+      return 'alive'
+    }
+    return 'down'
   } catch (err) {
     logger.warn({ err, claudePid, agentName, providerType }, 'Channel-plugin liveness probe failed (state dir) -- verdict unknown, not restarting')
     return 'unknown'

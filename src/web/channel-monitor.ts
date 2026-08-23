@@ -47,7 +47,7 @@ import { notifyChannel } from '../notify.js'
 import { getProvider, channelStateDir, readChannelToken, type ChannelProviderType } from '../channel-provider.js'
 import { attemptChannelMcpReconnect } from './channel-mcp-reconnect.js'
 import { readLastIngestionTimestamp, TRANSCRIPT_DIR } from './inbound-probe.js'
-import { decideDownAgentAction, AGENT_MAX_RESTART_ATTEMPTS, parseEtimeToSeconds } from './agent-restart-policy.js'
+import { decideDownAgentAction, AGENT_MAX_RESTART_ATTEMPTS, parseEtimeToSeconds, shouldClearRestartBudget } from './agent-restart-policy.js'
 // getClaudePidForSession + hasChannelPluginAlive live in the shared liveness
 // module so the standalone channel-coordinator reuses the exact same probe.
 import { getClaudePidForSession, hasChannelPluginAlive, probeChannelPluginLiveness } from '../channel-coordinator/liveness.js'
@@ -82,6 +82,15 @@ function resolveAgentProvider(name: string): ChannelProviderType {
 
 const agentDownSince: Map<string, number> = new Map()
 const agentLastRestart: Map<string, number> = new Map()
+// Timestamp of the first 'alive' observation in the CURRENT up-spell (per
+// session), used to gate the restart-failure-budget reset behind a stability
+// dwell. A single 'alive' sighting right after a fresh restart is NOT proof of
+// recovery: a poller that briefly appears in-tree then dies/reparents used to
+// reset agentRestartFailures to 0 every cycle, so the exponential back-off and
+// the AGENT_MAX_RESTART_ATTEMPTS escalation NEVER engaged -- the never-bounded
+// idle-sub-agent churn (#375). Cleared on any 'down' sweep and once the budget
+// is actually cleared.
+const agentAliveSince: Map<string, number> = new Map()
 // Agents already warned about a missing channel token, so the per-sweep probe
 // does not repeat the identical WARN every minute forever (observed 2026-07-20:
 // teamer, an agent with no channel token bound, emitted the same line ~1440x/day
@@ -165,6 +174,13 @@ const AGENT_STARTUP_GRACE_MS = 180_000
 // hard-restarts in one day, one of them on a plugin that reported healthy again
 // a minute later without ever being restarted -- it was never down.
 const AGENT_DOWN_CONFIRM_MS = 150_000
+// A recovered plugin must stay alive at least this long before we trust the
+// recovery enough to clear the accumulated restart-failure budget. Mirrors
+// AGENT_DOWN_CONFIRM_MS (a down must persist before we restart; an up must
+// persist before we forgive the backoff). Without this, a poller flapping
+// up-for-one-sweep every cycle keeps resetting the budget and the
+// AGENT_MAX_RESTART_ATTEMPTS escalation never fires (#375).
+const AGENT_ALIVE_STABLE_DWELL_MS = 150_000
 // A restart is a FRESH session: it destroys the work in flight. While the agent
 // is actively generating, defer -- a down channel does not stop it working, it
 // only stops it hearing. But a permanently busy agent with a dead channel is
@@ -1677,14 +1693,25 @@ export function startChannelPluginMonitor(): NodeJS.Timeout | null {
           // deafness blind spot). Cross-check the keep-alive freshness.
           checkMainKeepaliveStaleness()
         } else {
+          const now = Date.now()
           if (agentDownSince.has(t.session)) {
             logger.info({ session: t.session, provider: t.provider }, 'Agent channel plugin recovered')
             agentDownSince.delete(t.session)
           }
-          // Healthy observation clears the exponential back-off so the next
-          // down-spell starts again at the base grace.
-          agentRestartFailures.delete(t.agentName!)
-          clearPersistedAgentFailures(t.agentName!)
+          // Start (or keep) the stability-dwell clock for the current up-spell.
+          // A single healthy sighting does NOT immediately clear the back-off:
+          // a poller that flaps up-for-one-sweep every cycle would otherwise
+          // keep resetting the budget and the escalation would never fire (#375).
+          if (!agentAliveSince.has(t.session)) agentAliveSince.set(t.session, now)
+          // Only forgive the exponential back-off once the plugin has stayed
+          // alive for AGENT_ALIVE_STABLE_DWELL_MS -- proof of a real recovery,
+          // not a transient in-tree blip. Until then keep the accumulated
+          // failures so the backoff + max-attempts escalation can progress.
+          if (shouldClearRestartBudget(agentAliveSince.get(t.session) ?? null, now, AGENT_ALIVE_STABLE_DWELL_MS)) {
+            agentRestartFailures.delete(t.agentName!)
+            clearPersistedAgentFailures(t.agentName!)
+            agentAliveSince.delete(t.session)
+          }
           agentBusyDeferAlerted.delete(t.session)
           // Retire any stale absent verdict too, so a future down-spell starts
           // with the full restart budget rather than the absent-capped one.
@@ -1695,6 +1722,10 @@ export function startChannelPluginMonitor(): NodeJS.Timeout | null {
       if (t.isMarveen) {
         if (shouldEscalateMarveenDown()) await handleMarveenDown()
       } else {
+        // Any down sweep ends the current up-spell: reset the stability-dwell
+        // clock so a later recovery must re-earn the full dwell before the
+        // restart-failure budget is forgiven (keeps the escalation reachable).
+        agentAliveSince.delete(t.session)
         if (!agentDownSince.has(t.session)) {
           agentDownSince.set(t.session, Date.now())
           // First down observation of this spell: capture WHY before anything is

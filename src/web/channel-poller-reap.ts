@@ -29,7 +29,7 @@ import type { ChannelProviderType } from '../channel-provider.js'
 import { channelStateDir } from '../channel-provider.js'
 import { logger } from '../logger.js'
 
-const STATE_ENV_VAR: Record<ChannelProviderType, string> = {
+export const STATE_ENV_VAR: Record<ChannelProviderType, string> = {
   telegram: 'TELEGRAM_STATE_DIR',
   slack: 'SLACK_STATE_DIR',
   discord: 'DISCORD_STATE_DIR',

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { shouldAutoRestartDownAgent, effectiveRestartGraceMs, parseEtimeToSeconds, decideDownAgentAction } from '../web/agent-restart-policy.js'
+import { shouldAutoRestartDownAgent, effectiveRestartGraceMs, parseEtimeToSeconds, decideDownAgentAction, shouldClearRestartBudget } from '../web/agent-restart-policy.js'
 
 const STARTUP = 180_000
 const RESTART = 90_000
@@ -340,5 +340,29 @@ describe('decideDownAgentAction', () => {
         consecutiveFailures: 0,
       }, ABSENT_MAX)).toBe('skip')
     })
+  })
+})
+
+describe('shouldClearRestartBudget -- stability dwell before forgiving the backoff (#375)', () => {
+  const DWELL = 150_000
+
+  it('does NOT clear on a transient alive: aliveSince just now, dwell not elapsed', () => {
+    expect(shouldClearRestartBudget(1_000_000, 1_000_000, DWELL)).toBe(false)
+  })
+
+  it('does NOT clear one sweep (60s) into the up-spell', () => {
+    expect(shouldClearRestartBudget(1_000_000, 1_060_000, DWELL)).toBe(false)
+  })
+
+  it('clears once the plugin has stayed alive for the full dwell', () => {
+    expect(shouldClearRestartBudget(1_000_000, 1_150_000, DWELL)).toBe(true)
+  })
+
+  it('clears when well past the dwell', () => {
+    expect(shouldClearRestartBudget(1_000_000, 2_000_000, DWELL)).toBe(true)
+  })
+
+  it('never clears when there is no up-spell in progress (aliveSince null)', () => {
+    expect(shouldClearRestartBudget(null, 9_999_999, DWELL)).toBe(false)
   })
 })
