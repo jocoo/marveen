@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { existsSync } from 'node:fs'
 
 // The health monitor runs the (synchronous, blocking) MCP reconnect in a
 // DETACHED child process so it can never starve the dashboard event loop, so we
@@ -27,6 +28,7 @@ vi.mock('../config.js', () => ({
   MAIN_AGENT_ID: 'marveen',
   CHANNEL_PROVIDER: 'telegram',
   PROJECT_ROOT: '/tmp/test-claudeclaw',
+  STORE_DIR: '/tmp/test-claudeclaw/store',
 }))
 
 vi.mock('../web/agent-config.js', () => ({
@@ -110,9 +112,19 @@ describe('startChannelHealthMonitor', () => {
     // Off-main-loop: a detached child (reconnect-cli.js) is spawned instead of
     // calling attemptChannelMcpReconnect inline (event-loop starvation fix).
     expect(mockSpawn).toHaveBeenCalled()
-    const [, args] = mockSpawn.mock.calls[0]
-    expect(String(args[0])).toContain('reconnect-cli')
-    expect(args[1]).toBe('marveen')
+    const call = mockSpawn.mock.calls[0]
+    // The spawn is flock-wrapped for host-wide /mcp-menu serialization (#377/#378),
+    // so assert on the flattened command line rather than a fixed arg position.
+    const flat = [call[0], ...(call[1] as string[])].map(String)
+    expect(flat.some((a) => a.includes('reconnect-cli'))).toBe(true)
+    expect(flat).toContain('marveen')
+    // Where flock exists (Linux, incl. CI), the reconnect must run under the shared
+    // tmux-op lock; where it does not, we fall back to a direct spawn.
+    const hasFlock = ['/usr/bin/flock', '/bin/flock'].some((p) => existsSync(p))
+    if (hasFlock) {
+      expect(flat.some((a) => a.includes('flock'))).toBe(true)
+      expect(flat.some((a) => a.includes('.tmux-op.lock'))).toBe(true)
+    }
     clearInterval(timer)
   })
 })

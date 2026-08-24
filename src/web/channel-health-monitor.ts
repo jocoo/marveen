@@ -1,7 +1,9 @@
 import { spawn } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
+import { join } from 'node:path'
+import { existsSync } from 'node:fs'
 import { logger } from '../logger.js'
-import { MAIN_AGENT_ID } from '../config.js'
+import { MAIN_AGENT_ID, STORE_DIR } from '../config.js'
 import { listAgentNames } from './agent-config.js'
 import { isAgentRunning, capturePane } from './agent-process.js'
 import {
@@ -23,11 +25,28 @@ import { MAIN_CHANNELS_SESSION } from './main-agent.js'
 const RECONNECT_CLI = fileURLToPath(new URL('./reconnect-cli.js', import.meta.url))
 const inFlightReconnects = new Set<string>()
 
+// Serialize every tmux /mcp-menu walk host-wide behind ONE lock so concurrent
+// reconnects (one per agent, all fired on the same post-restart tick) — and the
+// channels.sh bring-up / post-init unlock, which take the SAME store/.tmux-op.lock —
+// never drive the shared tmux server's menus at the same instant. Concurrent menu
+// navigation is what wedges cursor placement ("Could not select reconnect within N
+// steps"), the common root of #377 (sub-agents) and #378 (main session vs bring-up).
+// flock wraps the whole reconnect-cli process; a -w timeout just skips this round
+// (the agent stays unhealthy and is retried next tick, which naturally staggers the
+// fan-out). Falls back to a direct spawn where flock is absent (non-Linux) so we
+// never lose reconnect capability entirely.
+const TMUX_OP_LOCK = join(STORE_DIR, '.tmux-op.lock')
+const FLOCK_BIN = ['/usr/bin/flock', '/bin/flock'].find((p) => existsSync(p)) ?? null
+const RECONNECT_LOCK_WAIT_SEC = '25'
+
 function spawnDetachedReconnect(agentName: string): boolean {
   if (inFlightReconnects.has(agentName)) return false
   inFlightReconnects.add(agentName)
   try {
-    const child = spawn(process.execPath, [RECONNECT_CLI, agentName], {
+    const [cmd, args] = FLOCK_BIN
+      ? ([FLOCK_BIN, ['-w', RECONNECT_LOCK_WAIT_SEC, TMUX_OP_LOCK, process.execPath, RECONNECT_CLI, agentName]] as const)
+      : ([process.execPath, [RECONNECT_CLI, agentName]] as const)
+    const child = spawn(cmd, args, {
       detached: true,
       stdio: 'ignore',
       env: process.env,

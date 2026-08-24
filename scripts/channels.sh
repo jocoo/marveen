@@ -623,6 +623,18 @@ fi
 # plugin dies in a restart loop, on a headless box where /login is impossible.
 # Creating the server ourselves makes set-environment -g always land, which is
 # what the fix intended. start-server is idempotent and cheap.
+#
+# Serialize this whole bring-up behind the shared tmux-op lock (store/.tmux-op.lock).
+# The dashboard's channel-mcp-reconnect (reconnect-cli) takes the SAME lock before
+# it walks this session's /mcp menu, so it can no longer drive the menu while we
+# kill/recreate the session underneath it -- the concurrent-manipulation churn
+# (duplicate session / can't find pane / 0s rapid-exit, #378) measured 2026-08-24.
+# Held only across bring-up + the startup guard; released before the monitor loop
+# (the post-init unlock subshell re-acquires it independently). flock -w so a stale
+# holder can never wedge boot: on timeout we log and proceed.
+_TMUX_OP_LOCK="$INSTALL_DIR/store/.tmux-op.lock"
+exec 9>"$_TMUX_OP_LOCK" 2>/dev/null || true
+flock -w 30 9 2>/dev/null || echo "WARN: tmux-op lock not acquired in 30s -- proceeding with bring-up" >&2
 $TMUX start-server 2>/dev/null || true
 if [ -n "${CLAUDE_CODE_OAUTH_TOKEN:-}" ]; then
   $TMUX set-environment -g CLAUDE_CODE_OAUTH_TOKEN "$CLAUDE_CODE_OAUTH_TOKEN" 2>/dev/null || true
@@ -721,6 +733,13 @@ for i in 1 2 3 4 5 6 7 8 9 10 11 12; do
   esac
 done
 unset _eperm_restarted
+
+# Release the shared tmux-op lock: bring-up + the startup guard are done, and the
+# long-running monitor loop below must NOT hold it (that would block every reconnect
+# for the whole session lifetime). The post-init unlock subshell re-acquires the
+# same lock on its own fd for its /mcp keystrokes.
+flock -u 9 2>/dev/null || true
+exec 9>&- 2>/dev/null || true
 
 # Set agent name once the session is ready. (/remote-control dropped: the operator no
 # longer uses Remote Control.)
@@ -830,6 +849,16 @@ date +%s > "$INSTALL_DIR/store/.channel-last-respawn"
     exit 0
   fi
 
+  # Serialize this /mcp menu walk behind the shared tmux-op lock (fd 8, same
+  # store/.tmux-op.lock the dashboard reconnect-cli takes) so our keystrokes and the
+  # dashboard's cannot drive the menu on this session at the same time -- concurrent
+  # navigation is what wedges cursor placement (#377/#378). Scoped to the keystroke
+  # section only; the 60s bun-poller verify below runs UNLOCKED. -w so a stuck holder
+  # never blocks the unlock forever; on timeout we proceed (the dashboard monitor is
+  # the primary recovery anyway).
+  exec 8>"$INSTALL_DIR/store/.tmux-op.lock" 2>/dev/null || true
+  flock -w 20 8 2>/dev/null || echo "$(date '+%Y-%m-%d %H:%M:%S') channels.sh post-init: tmux-op lock not acquired in 20s -- proceeding with unlock" >> "$INSTALL_DIR/store/channels-failures.log"
+
   # Check 3: TUI confirmation that the plugin's row is in a failed state. The
   # /mcp view also shows "(disabled)" markers; we only fire on failed, never on
   # disabled (Enable-only submenu has no Reconnect, the Up+Enter+Enter sequence
@@ -890,6 +919,12 @@ date +%s > "$INSTALL_DIR/store/.channel-last-respawn"
   else
     echo "$(date '+%Y-%m-%d %H:%M:%S') channels.sh post-init: input line NOT verified empty after unlock round (state: $END_STATE) -- not retrying (MCPDUP806), check manually: tmux attach -t $SESSION" >> "$INSTALL_DIR/store/channels-failures.log"
   fi
+
+  # Release the tmux-op lock: the menu walk is done. The bun-poller verify below is
+  # a read-only pgrep wait and must not hold the lock (it would block reconnects for
+  # up to 60s for no reason).
+  flock -u 8 2>/dev/null || true
+  exec 8>&- 2>/dev/null || true
 
   # Effect (MCPDUP806): a fired unlock is only a keystroke sequence; whether it
   # WORKED shows up as the plugin's bun poller appearing under the claude
