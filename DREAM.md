@@ -1,29 +1,29 @@
-# 💭 Dream Engine — 2026-08-23 02:07
+# 💭 Dream Engine — 2026-08-25 02:07
 
 ## 💡 Skill-javaslatok
 
-Ma élőben patchelve: `kanban-audit` SKILL.md (a scheduled-task saját fájlja) — új Buktatók-bejegyzés arról, hogy az `outgoing-copy-gate.py` a dupla kötőjeles gondolatjel-pótlót (` -- `) is elutasítja, nem csak a valódi em dash-t; a felfedezés a 12:00-ás kanban-audit Telegram-üzenete közben történt, azonnal be lett dolgozva a Buktatókba.
+Ma (08-24) élőben patchelve/létrehozva: `stuck-multiline-input-recovery` (új skill + 2 patch, Cuzcoo) — a be nem küldött, beragadt tmux-input diagnózisa és kézi Enter-fixe, plusz a teljes-restart eszkaláció ha az nem elég (3. előfordulásnál már kellett); `cross-agent-screenshot-and-decision-relay` (új skill + 1 patch, Cuzcoo) — Jocoo-Telegram-képernyőkép relay egy másik sub-agent szakterületéhez, plusz az élő hibakeresés közbeni üzenet-lemaradási minta.
 
-Ezen felül nincs újabb, éjszakai javaslat: a nap fő eseménye (#369 Surface képernyő-elsötétülés lezárása Jocoo visszaigazolása alapján) tisztán a meglévő kanban-card-lifecycle mintát követte, a 16:00/20:00-ás kanban-audit körök is rutinszerűen, hiba nélkül futottak.
+Ezen felül egy új javaslat: Kronk memóriáiban kétszer, egymástól függetlenül dokumentálva bukkant fel ugyanaz a workaround a marveen vitest suite live-install guardja körül (git worktree + node_modules symlink + fájlmásolás, mert a `store/.dashboard-token` jelenléte miatt a teszt-suite megtagadja a futást az élő installon). Mivel ez már kétszer kézzel le lett vezetve ugyanazon a napon, érdemes lenne Kronknak egy dedikált skillbe önteni.
 
 ## 🧹 Memória-egészség
 
-1134 / 1134 vektorizált, nincs hiányzó embedding. 31 antikvált (7+ napos, nem hivatkozott) hot-tier memória cold-tier-be mozgatva — jórészt lezárt/szüneteltetett szálak (Home-server #347 döntéssorozata, #325/#326/#327/#337 lezárt Financials-kártyák, korábbi skip-skill jegyzetek). A már ismert 2 pontos duplikátum-pár (`"Szeretem a kávét"`, `"Mai megbeszelés eredménye"`, egyenként 4-4 példány) továbbra is cold-tier-ben, nincs változás.
+1208 / 1208 vektorizált (1 hiányzó embedding pótolva backfill-lel). 4 antikvált (7+ napos, nem hivatkozott) hot-tier memória cold-tier-be mozgatva (egy korábbi Surface Pro TV-ötlet, két 08-17-i #359 Surface-szál bejegyzés, egy régi skip-skill jegyzet). A már ismert 2 duplikátum-pár ("Szeretem a kávét", "Mai megbeszelés eredménye") továbbra is cold-tier-ben, nincs változás.
 
 ## 🎯 Top-3 holnapi javaslat
 
-1. Marveen_Env: #234 (pending inter-agent message eszkaláció/láthatóság, urgent) — 21 napja nyitva, Yzma diagnózisa megvan (elveszett retry a "busy" WARN után), a tényleges javítás még mindig nem történt meg.
-2. Scouts: #328 (40th Anniversary social media terv, urgent, Matt emailje alapján) — Chicha-nál, legutóbbi mozgás 08-12-én, érdemes rákérdezni válaszolt-e már Matt a 08-12-i megbeszélés óta.
-3. Marveen_Env: #221 (Fleet: agens munkakönyvtárak kiköltöztetése a marveen repóból, high) — Cuzcoo-nál, 22 napja nem mozdult, infra-adósság ami egyszer blokkolhat egy repo-műveletet.
+1. HomeLab: #350 (*arr stack + uTorrent bekötés) — a nap legaktívabb szála, technikailag kész (letöltő-kliens bekötve Radarr+Sonarr-ba, útvonal-fordítás, megosztott mappa írás-tesztelve), csak a valódi végpontig-tesztelt letöltés maradt hátra. Jocoo A utat választotta (valódi indexer/tracker), de holnapra halasztotta.
+2. Infra: #384 (stuck multi-row input, auto-recovery gyökér-oka) — ma este háromszor fordult elő (Kronk 1x, Chicha 2x), a harmadiknál már kézi Enter sem oldotta meg, teljes agent-restart kellett, prioritás emelve high-ra.
+3. Scouts: #143 (den-leltár lista, aktív kölcsönzések felmérésével) — high priority, régóta nyitva, valós határidős kötelezettség Jocoo Quartermaster szerepéből.
 
-(#276/#531fe752, Financials Published P&L Looker-szűrés, kimaradt a listából annak ellenére hogy high priority: Jocoo 2026-08-05-én explicit megállította, "nem fontos most", a döntés érvényben marad, ő hozza elő ha aktuális lesz. #347 Home-server projekt is szándékosan kimaradt: Jocoo maga a blokkoló egy fizikai lépésnél, korábbi explicit kérése szerint nem kell nudgeolni.)
+(#531fe752, Financials Published P&L Looker-szűrés, kimaradt a listából annak ellenére hogy high priority: Jocoo 2026-08-05-én explicit megállította, "nem fontos most", a döntés érvényben marad, ő hozza elő ha aktuális lesz.)
 
 ## 🌐 External opportunity
 
-Skip — heti limit nem telt le (utolsó futás 4 napja).
+Skip — heti limit nem telt le (utolsó futás 6.0 napja, a 7 napos ablak még nem zárult le).
 
 ## 🛠 Skill-flotta health
 
-Öt skill (`ai-fleet-project-execution`, `github-pr-rebase-merge`, `retrospective`, `skill-management`, `kanban-to-trello-migration`) továbbra is nulla `skill_usage`-gal áll — a korábbi döntés szerint ezt a bucket-et nem bővítem tovább napi részletezéssel, amíg nem lesz kézi audit-kör.
+A nulla `skill_usage`-gal álló, nem-pinned, 30+ napja nem módosított skillek listája mára 27-re nőtt (a tegnap még 5 elemű listáról) — ez már a többszöri éjszakai halasztás jele, a mtime-only jelöltek közül ennyi valóban aktivitás nélküli. Javaslat: ez a bucket most már döntést igényel Jocootól vagy Kronktól, nem újabb éjszakai puszta-jelzést — érdemes egy dedikált kézi audit-kört tartani (törlés vagy megtartás-indoklás soronként), mielőtt a lista tovább nő.
 
 *Marveen, 02:19 — most már alszom én is.*
