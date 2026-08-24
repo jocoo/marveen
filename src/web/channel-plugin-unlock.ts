@@ -35,6 +35,7 @@
 import { execFileSync } from 'node:child_process'
 import { resolveFromPath } from '../platform.js'
 import { logger } from '../logger.js'
+import { paneLooksIdle } from '../pane-state.js'
 import type { ChannelProviderType } from '../channel-provider.js'
 import { tryAcquireSessionSendLane } from './session-send-lock.js'
 
@@ -67,6 +68,20 @@ const KEYSTROKE_SETTLE_MS = 1500
 // first Escape can be swallowed by the toast dismiss instead of backing
 // out of the action menu.
 const POST_UNLOCK_SETTLE_MS = 3000
+
+// Verified-close budget (card #382). The blind fixed "Escape, sleep, Escape"
+// tail (#236) is not robust: under a multi-agent cold-start (wsl --shutdown,
+// the 03:00 auto-restart) the shared tmux server is CPU-starved, an Escape
+// keystroke gets dropped or coalesced, and the /mcp modal stays open. The
+// pane then reads 'unknown' (not idle, not busy), the scheduler/router skip
+// it, and the session goes deaf until the channel-monitor's Escape-observer
+// pops it 45s later. That observer was the ONLY thing closing these menus.
+// dismissMcpMenuUntilIdle makes the OPENER own the close: press Escape until
+// the pane is confirmed back at the idle prompt (bounded), so the observer is
+// a pure backstop, not the primary recovery. Budget is a touch more generous
+// than the reconnect path's (4 x 0.4s) to ride out cold-start contention.
+const UNLOCK_DISMISS_MAX_ESC = 6
+const UNLOCK_DISMISS_SETTLE_MS = 700
 
 // Sessions whose most recent unlock probe found the channel plugin ABSENT from
 // the /mcp list -- i.e. the plugin MCP server never loaded at all (distinct from
@@ -158,7 +173,49 @@ function isSessionReadyForUnlock(session: string): boolean {
   }
 }
 
-function sendUnlockKeystrokes(session: string, provider: ChannelProviderType): void {
+/**
+ * Fully dismiss the /mcp modal, verifying the pane is back at the idle prompt.
+ *
+ * The /mcp view is up to TWO levels deep (server LIST -> per-plugin action
+ * submenu). A blind fixed number of Escapes is unreliable: a swallowed Escape
+ * under cold-start load leaves the modal open with nothing detecting it (card
+ * #382). Press Escape until paneLooksIdle confirms the input box is live and
+ * empty, bounded by UNLOCK_DISMISS_MAX_ESC. We assert the POSITIVE idle state
+ * (not merely "no menu"), because the deaf failure mode is a pane parked in the
+ * 'unknown' state, which is not a blocking menu -- a negative check would call
+ * that success. Extra Escapes at the prompt are harmless no-ops and the loop
+ * stops the instant idle is confirmed, so it never over-presses into the
+ * rewind history overlay. Mirrors channel-mcp-reconnect.ts dismissMcpMenu.
+ */
+function dismissMcpMenuUntilIdle(session: string): void {
+  for (let i = 0; i < UNLOCK_DISMISS_MAX_ESC; i++) {
+    try {
+      execFileSync(TMUX, ['send-keys', '-t', session, 'Escape'], { timeout: 5000 })
+      execFileSync('/bin/sleep', [String(UNLOCK_DISMISS_SETTLE_MS / 1000)], { timeout: UNLOCK_DISMISS_SETTLE_MS + 2000 })
+    } catch {
+      return
+    }
+    let pane = ''
+    try {
+      pane = execFileSync(TMUX, ['capture-pane', '-t', session, '-p'], { timeout: 3000, encoding: 'utf-8' })
+    } catch {
+      return
+    }
+    if (pane && paneLooksIdle(pane)) return
+  }
+  // Budget exhausted without confirming idle: the modal may still be open (the
+  // exact deaf-but-alive condition). Log loudly so the channel-monitor observer
+  // / operator can intervene instead of failing silently.
+  let pane = ''
+  try {
+    pane = execFileSync(TMUX, ['capture-pane', '-t', session, '-p'], { timeout: 3000, encoding: 'utf-8' })
+  } catch { /* ignore */ }
+  if (!pane || !paneLooksIdle(pane)) {
+    logger.warn({ session }, 'channel-plugin-unlock: pane NOT confirmed idle after unlock dismiss escapes -- possible stuck /mcp modal')
+  }
+}
+
+function sendUnlockKeystrokes(session: string, provider: ChannelProviderType, claudePid: number): void {
   try {
     // Open the MCP dialog. Claude renders the server list within ~2s; the
     // 3s settle ensures the cursor is on the first item before we move.
@@ -178,7 +235,7 @@ function sendUnlockKeystrokes(session: string, provider: ChannelProviderType): v
       })
     } catch (err) {
       logger.warn({ err, session }, 'channel-plugin-unlock: capture-pane after /mcp open failed -- aborting')
-      try { execFileSync(TMUX, ['send-keys', '-t', session, 'Escape'], { timeout: 5000 }) } catch { /* ignore */ }
+      dismissMcpMenuUntilIdle(session)
       return
     }
     if (!paneAfterOpen.includes(provider)) {
@@ -188,7 +245,25 @@ function sendUnlockKeystrokes(session: string, provider: ChannelProviderType): v
       // Record the absent verdict so the down-cascade escalates to the operator
       // after one restart instead of looping fresh-restarts that cannot help.
       markPluginAbsent(session)
-      try { execFileSync(TMUX, ['send-keys', '-t', session, 'Escape'], { timeout: 5000 }) } catch { /* ignore */ }
+      dismissMcpMenuUntilIdle(session)
+      return
+    }
+
+    // Late-attach guard (card #382). The sole down-signal upstream of this call
+    // is bun-child absence at a fixed T+35s(+retries) deadline. On sub-agents
+    // the bun poller regularly attaches LATER than that window during a
+    // multi-agent cold-start, so hasBunChild returned a FALSE negative and we
+    // are about to unlock a plugin that is actually fine (measured: agent-kronk
+    // fired 93 unlocks against 135 "plugin healthy" observations in the same
+    // window). Re-read the poller now that /mcp is open (the 35s+3s let a slow
+    // handshake finish): if it has attached, the plugin is connected and
+    // Up+Enter+Enter would land on "Disable" -- so do NOT navigate. Just close
+    // the menu we opened. This removes the dominant source of spurious /mcp
+    // opens (and thus of stuck menus) at its root, not just the stuck-close.
+    if (hasBunChild(claudePid)) {
+      clearPluginAbsent(session)
+      logger.info({ session, claudePid, provider }, 'channel-plugin-unlock: bun poller attached during the /mcp open -- plugin healthy, closing menu without unlock (no navigation)')
+      dismissMcpMenuUntilIdle(session)
       return
     }
 
@@ -209,15 +284,15 @@ function sendUnlockKeystrokes(session: string, provider: ChannelProviderType): v
     // "Schedule target session busy" until someone manually presses Esc.
     // 2026-06-01 19:25 incident: the unlock probe recovered the plugin at
     // 19:27:16, but the pane stayed wedged in the MCP list until manual
-    // Escape at 19:40 -- 13 minutes of dropped traffic. Escape twice to
-    // back out of both menu levels (action menu -> server list -> idle
-    // prompt), with a settle between so the first Escape lands before
-    // the second arrives.
+    // Escape at 19:40 -- 13 minutes of dropped traffic. Back out of both menu
+    // levels (action menu -> server list -> idle prompt) with a VERIFIED
+    // Escape-until-idle loop rather than a fixed pair (#236): a swallowed
+    // Escape under cold-start contention used to leave the modal open with the
+    // channel-monitor observer as the only recovery. The opener now owns the
+    // close (card #382).
     execFileSync('/bin/sleep', [String(POST_UNLOCK_SETTLE_MS / 1000)], { timeout: POST_UNLOCK_SETTLE_MS + 2000 })
-    execFileSync(TMUX, ['send-keys', '-t', session, 'Escape'], { timeout: 5000 })
-    execFileSync('/bin/sleep', [String(KEYSTROKE_SETTLE_MS / 1000)], { timeout: KEYSTROKE_SETTLE_MS + 2000 })
-    execFileSync(TMUX, ['send-keys', '-t', session, 'Escape'], { timeout: 5000 })
-    logger.warn({ session }, 'channel-plugin-unlock: sent /mcp+Up+Enter+Enter+Esc+Esc unlock sequence')
+    dismissMcpMenuUntilIdle(session)
+    logger.warn({ session }, 'channel-plugin-unlock: sent /mcp+Up+Enter+Enter unlock sequence, dismissed to idle')
   } catch (err) {
     logger.error({ err, session }, 'channel-plugin-unlock: failed to deliver unlock keystrokes')
   }
@@ -283,7 +358,7 @@ function runUnlockProbe(state: UnlockProbeState): void {
     'channel-plugin-unlock: bun child absent after cold-start window, firing /mcp unlock sequence',
   )
   try {
-    sendUnlockKeystrokes(state.session, state.provider)
+    sendUnlockKeystrokes(state.session, state.provider, claudePid)
   } finally {
     releaseLane()
   }

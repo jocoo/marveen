@@ -87,7 +87,7 @@ describe('every unguarded pane writer routes through the send lane', () => {
     expect(src).toMatch(/tryAcquireSessionSendLane\(state\.session, null\)/)
     // Busy lane consumes retriesLeft exactly like the not-idle branch.
     expect(src).toMatch(/pane send lane busy \(delivery in flight\), retrying/)
-    expect(src).toMatch(/sendUnlockKeystrokes\(state\.session, state\.provider\)\s*\} finally \{\s*releaseLane\(\)/)
+    expect(src).toMatch(/sendUnlockKeystrokes\(state\.session, state\.provider, claudePid\)\s*\} finally \{\s*releaseLane\(\)/)
   })
 
   it('reauth-healer wraps the /login sequence in recover-mode and logs the skip', () => {

@@ -55,14 +55,15 @@ describe('channel-plugin-unlock helper contract', () => {
     expect(helper).toMatch(/bypass permissions on/)
   })
 
-  it('delivers /mcp, Up, Enter, Enter then Esc, Esc to back the pane out to idle', () => {
-    // Pinning the full 6-key sequence:
-    //   /mcp + Up + Enter + Enter   -> revive plugin (Enable / Reconnect)
-    //   Esc + Esc                   -> back out of menu so pane returns idle
-    // Both Escapes are required: one for the action menu, one for the
-    // server list. Without them, detectPaneState stays non-idle and every
-    // scheduled task + inter-agent msg piles up "session busy"
-    // (2026-06-01 19:25 incident -- 13 min of dropped traffic).
+  it('delivers /mcp, Up, Enter, Enter then a VERIFIED dismiss-to-idle (card #382)', () => {
+    // Pinning the revive sequence + the verified close:
+    //   /mcp + Up + Enter + Enter    -> revive plugin (Enable / Reconnect)
+    //   dismissMcpMenuUntilIdle(...)  -> Escape-until-paneLooksIdle, bounded
+    // The old fixed "Esc, Esc" tail (#236) was not robust: under a multi-agent
+    // cold-start a swallowed Escape left the /mcp modal open with the
+    // channel-monitor Escape-observer as the ONLY recovery (card #382). The
+    // opener must now own the close via the verified loop, so the observer is a
+    // pure backstop. This test forbids a regression back to a blind fixed pair.
     const sendStart = helper.indexOf('function sendUnlockKeystrokes')
     expect(sendStart, 'sendUnlockKeystrokes not found').toBeGreaterThan(0)
     const sendEnd = helper.indexOf('\n}\n', sendStart)
@@ -71,16 +72,51 @@ describe('channel-plugin-unlock helper contract', () => {
     const upIdx = sendBody.indexOf("'Up'")
     expect(upIdx, "'Up' keystroke missing").toBeGreaterThan(0)
     const afterUp = sendBody.slice(upIdx)
-    // Exactly two Enters after Up.
+    // Exactly two Enters after Up (the two-level revive: submenu open + action).
     const enterMatches = afterUp.match(/send-keys[^]*?'Enter'\]/g) ?? []
     expect(enterMatches.length).toBe(2)
-    // Exactly two Escapes after the second Enter.
-    const escapeMatches = afterUp.match(/send-keys[^]*?'Escape'\]/g) ?? []
-    expect(escapeMatches.length).toBe(2)
-    // Order: both Escapes must come AFTER the last Enter.
+    // The close is the verified dismiss helper, invoked after the last Enter --
+    // NOT a fixed count of blind Escape send-keys in this function body.
     const lastEnterIdx = afterUp.lastIndexOf("'Enter'")
-    const firstEscapeIdx = afterUp.indexOf("'Escape'")
-    expect(firstEscapeIdx).toBeGreaterThan(lastEnterIdx)
+    const dismissIdx = afterUp.indexOf('dismissMcpMenuUntilIdle(session)')
+    expect(dismissIdx, 'verified dismiss not called after the revive Enters').toBeGreaterThan(lastEnterIdx)
+    // No raw Escape send-keys should remain in sendUnlockKeystrokes -- all
+    // closing goes through the verified loop.
+    expect(afterUp).not.toMatch(/send-keys[^]*?'Escape'\]/)
+  })
+
+  it('verified dismiss loop asserts the positive idle state and is bounded', () => {
+    // dismissMcpMenuUntilIdle must (a) exist, (b) check paneLooksIdle (positive
+    // idle, not merely "no menu" -- the deaf failure is a pane parked 'unknown'
+    // which is not a blocking menu), and (c) be bounded by a max-escapes const.
+    expect(helper).toMatch(/function\s+dismissMcpMenuUntilIdle\b/)
+    const dStart = helper.indexOf('function dismissMcpMenuUntilIdle')
+    const dEnd = helper.indexOf('\n}\n', dStart)
+    const dBody = helper.slice(dStart, dEnd > dStart ? dEnd : undefined)
+    expect(dBody).toMatch(/paneLooksIdle\(/)
+    expect(dBody).toMatch(/UNLOCK_DISMISS_MAX_ESC/)
+    expect(helper).toMatch(/const\s+UNLOCK_DISMISS_MAX_ESC\s*=\s*\d+/)
+  })
+
+  it('re-checks the bun poller after opening /mcp and skips navigation on late-attach (card #382)', () => {
+    // Dominant spurious-open cause: bun-child absence at the fixed T+35s probe
+    // deadline is a false negative when the poller attaches later during a
+    // cold-start. After /mcp is open the code must re-check hasBunChild and, if
+    // present, close WITHOUT pressing Up+Enter+Enter (which would hit "Disable"
+    // on a now-healthy plugin). Assert the re-check sits AFTER the /mcp open and
+    // BEFORE the Up navigation, and returns.
+    const sendStart = helper.indexOf('function sendUnlockKeystrokes')
+    const sendEnd = helper.indexOf('\n}\n', sendStart)
+    const sendBody = helper.slice(sendStart, sendEnd > sendStart ? sendEnd : undefined)
+    const openIdx = sendBody.indexOf("'/mcp', 'Enter'")
+    const bunIdx = sendBody.indexOf('hasBunChild(claudePid)')
+    const upIdx = sendBody.indexOf("'Up'")
+    expect(openIdx, '/mcp open not found').toBeGreaterThan(0)
+    expect(bunIdx, 'late-attach hasBunChild re-check not found').toBeGreaterThan(openIdx)
+    expect(bunIdx, 'bun re-check must precede the Up navigation').toBeLessThan(upIdx)
+    // The guard branch must return before navigating.
+    const guardBody = sendBody.slice(bunIdx, upIdx)
+    expect(guardBody).toMatch(/return\b/)
   })
 
   it('schedules the probe with a cold-start delay >= 25 seconds', () => {
