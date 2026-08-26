@@ -2,7 +2,7 @@ import { existsSync, readFileSync, statSync, writeFileSync, utimesSync } from 'n
 import { hostname } from 'node:os'
 import { join } from 'node:path'
 import { execFileSync, spawn } from 'node:child_process'
-import { resolveFromPath } from '../platform.js'
+import { makeLazyBinResolver } from '../platform.js'
 import { WEB_PORT } from '../config.js'
 import { logger } from '../logger.js'
 import { MAIN_AGENT_ID, SERVICE_ID, BOT_NAME, CHANNEL_PROVIDER, PROJECT_ROOT, RESPAWN_ENABLED } from '../config.js'
@@ -50,11 +50,18 @@ import { readLastIngestionTimestamp, TRANSCRIPT_DIR } from './inbound-probe.js'
 import { decideDownAgentAction, AGENT_MAX_RESTART_ATTEMPTS, parseEtimeToSeconds, shouldClearRestartBudget } from './agent-restart-policy.js'
 // getClaudePidForSession + hasChannelPluginAlive live in the shared liveness
 // module so the standalone channel-coordinator reuses the exact same probe.
-import { getClaudePidForSession, hasChannelPluginAlive, probeChannelPluginLiveness } from '../channel-coordinator/liveness.js'
+import { getClaudePidForSession, hasChannelPluginAlive, probeChannelPluginLiveness, classifyRespawnStampAdvance } from '../channel-coordinator/liveness.js'
 import { getDesiredAgents } from './agent-desired-state.js'
 
-const TMUX = resolveFromPath('tmux')
-const CLAUDE = resolveFromPath('claude')
+// Lazily resolved (see makeLazyBinResolver): a module-level `resolveFromPath`
+// const throws at IMPORT time, so any environment where the binary is not
+// resolvable -- a transient PATH gap, or CI where no `claude` is installed --
+// fails the whole module load and takes every importer down with it. Deferring
+// to first use keeps importing this module side-effect free; the resolution
+// error then surfaces at the call site that actually needs the binary. This
+// mirrors the pattern already used in agent-process.ts.
+const tmuxBin = makeLazyBinResolver('tmux')
+const claudeBin = makeLazyBinResolver('claude')
 
 // How long the agent's claude process has been running. Returns -1 when it
 // cannot be determined, which the restart policy treats as "do not restart".
@@ -413,7 +420,7 @@ async function performStuckInputAction(
           // first (no-op when absent); an Enter on the then-idle prompt is
           // harmless.
           await dismissModelConsentDialogIfPresent(session)
-          execFileSync(TMUX, ['send-keys', '-t', session, 'Enter'], { timeout: 5000 })
+          execFileSync(tmuxBin(), ['send-keys', '-t', session, 'Enter'], { timeout: 5000 })
         }
         submitted = true
         break
@@ -431,7 +438,7 @@ async function performStuckInputAction(
         // Enter must never reach the model consent dialog (its default SWITCHES
         // the model). No-op when the dialog is absent.
         await dismissModelConsentDialogIfPresent(session)
-        execFileSync(TMUX, ['send-keys', '-t', session, 'Enter'], { timeout: 5000 })
+        execFileSync(tmuxBin(), ['send-keys', '-t', session, 'Enter'], { timeout: 5000 })
         submitted = true
         break
       case 'hold':
@@ -721,14 +728,14 @@ export function respawnMainSessionFresh(): void {
     logger.warn({ err }, 'respawnMainSessionFresh: pre-respawn reap failed (continuing)')
   }
   try {
-    reapDetachedChannelClaudes({ tmuxPath: TMUX })
+    reapDetachedChannelClaudes({ tmuxPath: tmuxBin() })
   } catch (err) {
     logger.warn({ err }, 'respawnMainSessionFresh: detached-claude reap failed (continuing)')
   }
   ensureSharedClaudeOnboarded()
 
   const claudeCmd = buildMainSessionRespawnCmd({
-    claudePath: CLAUDE,
+    claudePath: claudeBin(),
     pluginId: provider.pluginId,
     extraPluginIds: readExtraChannelPluginIds(),
     model: readConfiguredMainModel(),
@@ -738,7 +745,7 @@ export function respawnMainSessionFresh(): void {
     isolatedConfigDir: ensureMainAgentIsolatedConfigDir(),
     fleetToken: hasFleetOauthToken(),
   })
-  execFileSync(TMUX, ['respawn-pane', '-k', '-t', MAIN_CHANNELS_SESSION, claudeCmd], { timeout: 15000 })
+  execFileSync(tmuxBin(), ['respawn-pane', '-k', '-t', MAIN_CHANNELS_SESSION, claudeCmd], { timeout: 15000 })
   // Stamp IMMEDIATELY after the respawn, before the scheduling follow-ups.
   // The stamp is a coordination contract, not bookkeeping: five watchers read
   // lastMainRespawnAt() / store/.channel-last-respawn and suppress themselves
@@ -787,7 +794,7 @@ export async function resumeMarveenSession(): Promise<boolean> {
     // spares the live session (this pane) and kills only the leftovers.
     // See project_channels_continue_respawn_leak.
     try {
-      reapDetachedChannelClaudes({ tmuxPath: TMUX })
+      reapDetachedChannelClaudes({ tmuxPath: tmuxBin() })
     } catch (err) {
       logger.warn({ err }, 'resumeMarveenSession: detached-claude reap failed (continuing)')
     }
@@ -798,7 +805,7 @@ export async function resumeMarveenSession(): Promise<boolean> {
     ensureSharedClaudeOnboarded()
 
     const claudeCmd = buildMainSessionRespawnCmd({
-      claudePath: CLAUDE,
+      claudePath: claudeBin(),
       pluginId: provider.pluginId,
       extraPluginIds: readExtraChannelPluginIds(),
       model: readConfiguredMainModel(),
@@ -810,7 +817,7 @@ export async function resumeMarveenSession(): Promise<boolean> {
       isolatedConfigDir: ensureMainAgentIsolatedConfigDir(),
       fleetToken: hasFleetOauthToken(),
     })
-    execFileSync(TMUX, ['respawn-pane', '-k', '-t', MAIN_CHANNELS_SESSION, claudeCmd], { timeout: 15000 })
+    execFileSync(tmuxBin(), ['respawn-pane', '-k', '-t', MAIN_CHANNELS_SESSION, claudeCmd], { timeout: 15000 })
 
     // --continue replays the last conversation. When the prior session is large
     // (>200k tokens) Claude Code opens with a "Resume from summary" modal that
@@ -924,7 +931,49 @@ function fileRespawnStampMs(): number {
 function writeRespawnStamp(): void {
   try {
     writeFileSync(RESPAWN_STAMP_FILE, String(Math.floor(Date.now() / 1000)))
+    // Attribution input for the external-respawn detector below: a stamp we
+    // wrote ourselves must never be reported as an external actor.
+    lastSelfStampWriteMs = Date.now()
   } catch { /* best effort */ }
+}
+
+// --- external-respawn detector (SOAKRESPAWN819) ---
+//
+// The stamp is consumed by five watchers purely to SUPPRESS themselves, so a
+// respawn performed by anyone but this process (channels.sh relaunched by the
+// service manager after a watchdog exit, the systemd-timer channel-watchdog,
+// a manual operator launch) leaves no dashboard.log trace at all -- the
+// evidence quiets the watchers instead of surfacing. Measured live
+// (hermes soak box, 2026-08-19): 210 service-manager restarts at a ~40min
+// cadence, zero dashboard.log lines. This detector closes that: every stamp
+// advance not attributable to a dashboard-initiated respawn is logged loudly.
+// WHY the respawn happened lives in store/channels-respawn.log (producer-side
+// mirror written by channels.sh); this line says THAT it happened.
+let lastSelfStampWriteMs = 0
+let lastSeenRespawnStampMs = -1
+function checkExternalMainRespawn(): void {
+  const stampMs = fileRespawnStampMs()
+  if (lastSeenRespawnStampMs < 0) {
+    // Boot baseline: whatever the stamp said before this dashboard started is
+    // history, not this boot's news -- without this, every dashboard restart
+    // after any respawn would fire a spurious external-actor warning.
+    lastSeenRespawnStampMs = stampMs
+    return
+  }
+  const verdict = classifyRespawnStampAdvance({
+    stampMs,
+    lastSeenStampMs: lastSeenRespawnStampMs,
+    lastSelfRespawnMs: Math.max(marveenLastHardRestart, marveenLastKeepaliveRespawn, marveenLastSessionCreate, lastSelfStampWriteMs),
+    graceMs: MARVEEN_POST_RESPAWN_GRACE_MS,
+  })
+  if (verdict === 'none') return
+  lastSeenRespawnStampMs = stampMs
+  if (verdict === 'external') {
+    logger.warn(
+      { stampAt: new Date(stampMs).toISOString() },
+      'Main-session respawn stamp advanced by an EXTERNAL actor (service-manager relaunch of channels.sh, channel-watchdog timer, or manual launch) -- the main session was recreated outside the dashboard; reason breadcrumb: store/channels-respawn.log (SOAKRESPAWN819)'
+    )
+  }
 }
 
 // --- Vanished-session recovery (self-healing main session) ---
@@ -953,7 +1002,7 @@ let marveenLastSessionCreate = 0
 
 export function mainChannelsSessionExists(): boolean {
   try {
-    execFileSync(TMUX, ['has-session', '-t', MAIN_CHANNELS_SESSION], { timeout: 3000 })
+    execFileSync(tmuxBin(), ['has-session', '-t', MAIN_CHANNELS_SESSION], { timeout: 3000 })
     return true
   } catch {
     return false
@@ -1011,7 +1060,7 @@ function respawnMarveenSessionFresh(): boolean {
     // Same first-run-picker guard as resumeMarveenSession.
     ensureSharedClaudeOnboarded()
     const claudeCmd = buildMainSessionRespawnCmd({
-      claudePath: CLAUDE,
+      claudePath: claudeBin(),
       pluginId: provider.pluginId,
       extraPluginIds: readExtraChannelPluginIds(),
       model: readConfiguredMainModel(),
@@ -1022,7 +1071,7 @@ function respawnMarveenSessionFresh(): boolean {
       isolatedConfigDir: ensureMainAgentIsolatedConfigDir(),
       fleetToken: hasFleetOauthToken(),
     })
-    execFileSync(TMUX, ['respawn-pane', '-k', '-t', MAIN_CHANNELS_SESSION, claudeCmd], { timeout: 15000 })
+    execFileSync(tmuxBin(), ['respawn-pane', '-k', '-t', MAIN_CHANNELS_SESSION, claudeCmd], { timeout: 15000 })
     logger.warn({ provider: provider.type }, 'Hard restart: marveen session respawned fresh (no --continue)')
     // Re-establish /name on the fresh process (see note in resumeMarveenSession).
     // scheduleIdentitySetup only schedules delayed timers -> fire-and-forget.
@@ -1516,6 +1565,12 @@ export function startChannelPluginMonitor(): NodeJS.Timeout | null {
     // does not reset the cap and restart agents that have already been given up on.
     ensureAgentRestartFailuresInitialized()
 
+    // Surface main-session respawns performed by anyone but this process
+    // (SOAKRESPAWN819) -- must run every sweep, not only when the plugin
+    // probe reaches the main target, so an external churn is visible even
+    // while the plugin is structurally down.
+    checkExternalMainRespawn()
+
     type Target = { session: string; isMarveen: boolean; agentName?: string; provider: ChannelProviderType }
     const targets: Target[] = [{ session: MAIN_CHANNELS_SESSION, isMarveen: true, provider: mainProvider }]
     for (const a of listAgentNames()) {
@@ -1616,7 +1671,7 @@ export function startChannelPluginMonitor(): NodeJS.Timeout | null {
           } else {
             logger.warn({ session: t.session, agent: label }, 'Session parked in a blocking interactive menu -- sending Escape to recover')
             try {
-              execFileSync(TMUX, ['send-keys', '-t', t.session, 'Escape'], { timeout: 5000 })
+              execFileSync(tmuxBin(), ['send-keys', '-t', t.session, 'Escape'], { timeout: 5000 })
             } catch (err) {
               logger.warn({ err, session: t.session }, 'Menu-recovery Escape failed')
             }
@@ -1834,7 +1889,7 @@ export function startChannelPluginMonitor(): NodeJS.Timeout | null {
         }
         logger.warn({ agent: t.agentName, provider: t.provider, failures }, 'Agent channel plugin down -- auto-restarting')
         try {
-          stopAgentProcess(t.agentName!)
+          await stopAgentProcess(t.agentName!)
           // Settle before the fresh start. stopAgentProcess already reaps this
           // agent's channel orphans + waits 2s; add more so the shared plugin
           // cache (bun run --cwd <plugin>, .in_use markers) fully releases from
@@ -1851,7 +1906,7 @@ export function startChannelPluginMonitor(): NodeJS.Timeout | null {
           // the --channels plugin MCP server, so the agent comes up with no plugin
           // and no poller (verified: continue -> "Plugin not found" in /mcp; fresh
           // -> plugin loads + poller attaches). Context is dropped, memory persists.
-          startAgentProcess(t.agentName!, { fresh: true })
+          await startAgentProcess(t.agentName!, { fresh: true })
           agentLastRestart.set(t.agentName!, Date.now())
           agentDownSince.delete(t.session)
           agentBusyDeferAlerted.delete(t.session)
@@ -1880,7 +1935,7 @@ export function startChannelPluginMonitor(): NodeJS.Timeout | null {
     if (shouldRunPeriodicReap(lastDetachedReapAt, Date.now(), DETACHED_REAP_INTERVAL_MS)) {
       lastDetachedReapAt = Date.now()
       try {
-        const reaped = reapDetachedChannelClaudes({ tmuxPath: TMUX })
+        const reaped = reapDetachedChannelClaudes({ tmuxPath: tmuxBin() })
         if (reaped.length > 0) {
           logger.warn({ reaped }, 'channel-monitor: periodic reap removed detached channel-claude orphans')
         }
@@ -1944,7 +1999,7 @@ async function reconcileDesiredAgents(): Promise<void> {
       if (!memGateAllowsStart(name)) continue   // Commit 3 v1: safe-mode / memory gate
       logger.warn({ agent: name }, 'Desired agent not running -- auto-starting (reconcile)')
       try {
-        const r = startAgentProcess(name)
+        const r = await startAgentProcess(name)
         agentLastRestart.set(name, Date.now())
         if (!r.ok && r.error !== 'Agent is already running') {
           logger.error({ agent: name, error: r.error }, 'Reconcile start failed')
