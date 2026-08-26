@@ -12109,12 +12109,14 @@ async function loadUpdates() {
       summary.innerHTML = `<strong>${t('updates.up_to_date_html')}</strong>. ${t('updates.no_changes')}`
       applyBtn.hidden = true
     } else if (data.localAhead && data.localAhead > 0) {
+      const cur = (data.current || '').slice(0, 7)
       const base = (data.baseSha || '').slice(0, 7)
+      const lat = (data.latest || '').slice(0, 7)
       const aheadPart = data.behind > 0
         ? `<strong>${data.behind} új commit elérhető</strong> a <code>${escapeHtmlUpdates(data.remote)}</code> repón`
         : `<strong>Nincs új upstream commit</strong>`
       summary.className = 'updates-summary diverged'
-      summary.innerHTML = `${aheadPart}, és ${data.localAhead} saját lokális commit a tetején.<br>Jelenlegi: <code>${cur}</code> → Közös ős: <code>${base}</code> → Legfrissebb: <code>${lat}</code><br><small>Az automatikus frissítés ki van kapcsolva, mert a lokális commitok merge-konfliktust okozhatnak. Push-old fel őket fork-ra és csinálj PR-t, vagy rebase-eld az új main-re kézzel.</small>`
+      summary.innerHTML = `${aheadPart}, és ${data.localAhead} saját lokális commit a tetején.<br>Jelenlegi: <code>${escapeHtmlUpdates(cur)}</code> → Közös ős: <code>${escapeHtmlUpdates(base)}</code> → Legfrissebb: <code>${escapeHtmlUpdates(lat)}</code><br><small>Az automatikus frissítés ki van kapcsolva, mert a lokális commitok merge-konfliktust okozhatnak. Push-old fel őket fork-ra és csinálj PR-t, vagy rebase-eld az új main-re kézzel.</small>`
       applyBtn.hidden = true
     } else {
       summary.className = 'updates-summary behind'
