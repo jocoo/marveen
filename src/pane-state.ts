@@ -1522,6 +1522,7 @@ export type StuckInputAction =
   | 'clear-preamble'   // clear a truncated/stale safety preamble, never re-inject
   | 'clear-scheduled'  // clear a parked scheduled-task tick, never re-inject (next fire re-delivers)
   | 'enter'            // a single bare Enter -- ONLY safe at rowCount <= 1
+  | 'enter-verified'   // a bare Enter on a multi-row NON-placeholder park, verified after the fact
   | 'hold'             // do nothing this tick (multi-row truncated / truncation-guard)
 
 export interface StuckInputActionFacts {
@@ -1549,6 +1550,12 @@ export interface StuckInputActionFacts {
   /** parkedScheduledTaskInput(pane): a scheduled-task tick is parked. Clear-only
    * is safe on ANY session (the next schedule fire re-delivers). */
   scheduledTaskBlock: boolean
+  /** detectsPastePlaceholder(pane): a `[Pasted text #N]` stub is parked rather
+   * than verbatim text. STUCKENTER384: this is the ONE state where a bare Enter
+   * is proven not to submit -- it only EXPANDS the stub -- so it is what
+   * separates a safe multi-row Enter from an unsafe one (see the
+   * 'enter-verified' branch below). */
+  pastePlaceholder: boolean
 }
 
 /**
@@ -1562,12 +1569,46 @@ export interface StuckInputActionFacts {
  *   - A complete <channel> block is the safest move (chat_id-safe re-inject);
  *     prefer it as soon as we escalate, and immediately when multi-row.
  *   - A TRUNCATED <channel> block (chat_id unrecoverable) must not be
- *     re-injected; multi-row truncated holds (awaiting the keystroke fix),
- *     single-row keeps the harmless legacy Enter.
+ *     re-injected; multi-row truncated falls through to the verified-Enter
+ *     branch below, single-row keeps the harmless legacy Enter.
  *   - Otherwise a bare Enter is the swallowed-Enter remedy, but only single-row.
+ *
+ * STUCKENTER384 -- the no-remedy 'hold' is now narrower. The blanket
+ * "multi-row must never bare-Enter" rule was measured to be too wide. Both
+ * halves of the old contradiction are true, but of DIFFERENT states, and
+ * agent-process.ts (sendPromptToSession, ~1913) already models them:
+ *   (1) verbatim text parked under an idle footer  -> a plain Enter SUBMITS;
+ *   (2) a `[Pasted text #N]` placeholder stub      -> a plain Enter only
+ *       EXPANDS the stub, and on the expanded multi-row buffer it inserts a
+ *       newline instead of submitting (the upstream invariant).
+ * The watcher had no way to tell them apart, so it forbade both. The
+ * discriminator already exists and is exported: detectsPastePlaceholder().
+ * Measured 2026-08-27 on a disposable pane (probe-enter-multirow, card #384):
+ * a 9-row wrap-only verbatim park with placeholder=false SUBMITTED on a bare
+ * Enter (rowsAfter 0, pane went busy). Case (2)'s post-expansion second Enter
+ * was NOT reproducible in that run (the stub landed straight after expanding),
+ * so it stays UNMEASURED and therefore stays forbidden here.
+ *
+ * The move is 'enter-verified', not 'enter', because the caller must confirm
+ * it with the STRICT check (enterVerifiedOutcome below), not with
+ * submitLanded(): an inserted newline also changes the parked signature, so
+ * submitLanded() would report a false "landed" on exactly the failure this
+ * branch is designed to survive.
  */
 export function decideStuckInputAction(f: StuckInputActionFacts): StuckInputAction {
   const multiRow = f.rowCount > 1
+  // The no-safe-re-inject tail. Single-row keeps the legacy Enter; multi-row
+  // gets the verified Enter unless something makes it unsafe or premature:
+  //   - a parked paste placeholder -> Enter expands the stub instead of
+  //     submitting, and the expanded-buffer Enter is the unmeasured case (2);
+  //   - a truncated safety preamble -> 'clear-preamble' is the right move and
+  //     arrives on the next escalated tick; submitting a stale preamble to the
+  //     agent would pre-empt it.
+  const noReinjectTail = (): StuckInputAction => {
+    if (!multiRow) return 'enter'
+    if (f.pastePlaceholder || f.truncatedPreamble) return 'hold'
+    return 'enter-verified'
+  }
   // Complete channel block: chat_id-safe verbatim re-inject. Multi-row is itself
   // a reason to escalate now (a plain Enter would corrupt it).
   if (f.blockComplete) {
@@ -1599,11 +1640,44 @@ export function decideStuckInputAction(f: StuckInputActionFacts): StuckInputActi
   }
   // Truncated safety preamble: clear only (never re-inject a stale preamble).
   if (f.truncatedPreamble && f.escalate) return 'clear-preamble'
-  // Truncated <channel> block: hold a multi-row (Enter would corrupt; re-inject
-  // would answer the wrong chat_id), keep the harmless legacy Enter single-row.
-  if (f.blockTruncated) return multiRow ? 'hold' : 'enter'
-  // Default swallowed-Enter remedy -- never on multi-row.
-  return multiRow ? 'hold' : 'enter'
+  // Truncated <channel> block: re-injecting would answer the WRONG chat_id, so
+  // the only non-lossy move is submitting the buffer itself -- the bare Enter
+  // submits what is really parked, INCLUDING the rows the TUI dropped from the
+  // display. Single-row keeps the harmless legacy Enter.
+  if (f.blockTruncated) return noReinjectTail()
+  // Default swallowed-Enter remedy.
+  return noReinjectTail()
+}
+
+// Post-submit verification for the 'enter-verified' move (STUCKENTER384).
+//
+// Deliberately NOT submitLanded(): that predicate only asks whether the parked
+// signature CHANGED, and the failure mode this branch must survive -- the Enter
+// inserting a newline instead of submitting -- changes it too. So it is asked
+// the strict way instead: did the box stop being 'typing'?
+//
+//   'landed'           -- the pane left the parked state (cleared, or the agent
+//                         started processing it). Done.
+//   'newline-inserted' -- still parked AND the box grew a row: the upstream
+//                         invariant held for this pane. The caller UNDOES it
+//                         with one BSpace, which matters twice over: the buffer
+//                         is left byte-identical to before, and the restored
+//                         signature keeps the spell (and its finite attempts
+//                         budget) alive instead of restarting it as "new text"
+//                         on every tick -- an un-undone newline would make the
+//                         watcher accumulate one newline per tick forever.
+//   'unconfirmed'      -- no capture, or still parked at the same size: the
+//                         plain swallowed-Enter case. Nothing to undo; the next
+//                         tick escalates within the budget.
+export function enterVerifiedOutcome(
+  paneBefore: string,
+  paneAfter: string | null,
+): 'landed' | 'newline-inserted' | 'unconfirmed' {
+  if (paneAfter == null) return 'unconfirmed'
+  if (detectPaneState(paneAfter) !== 'typing') return 'landed'
+  return parkedInputRowCount(paneAfter) > parkedInputRowCount(paneBefore)
+    ? 'newline-inserted'
+    : 'unconfirmed'
 }
 
 // Would the soft stuck-input recovery have ANY submitting/clearing move for
@@ -1626,8 +1700,16 @@ export function parkedMainInputHasRemedy(pane: string): boolean {
     hasPlainText: false,
     scheduledTaskBlock: parkedScheduledTaskInput(pane),
     machineOrigin: parkedMachineOriginInput(pane),
+    pastePlaceholder: detectsPastePlaceholder(pane),
   }
-  return decideStuckInputAction(facts) !== 'hold'
+  const action = decideStuckInputAction(facts)
+  // 'enter-verified' does NOT count as a remedy here, on purpose. This guard
+  // exists to stop a no-remedy park from deferring the hard restart FOREVER
+  // (2026-07-25 hermes: the channel went permanently mute). A verified Enter is
+  // self-checking and finite -- if it does not land, the pane is exactly as
+  // unrecoverable as it was before -- so treating it as a remedy would re-open
+  // that deadlock for the sake of a move that may already have failed.
+  return action !== 'hold' && action !== 'enter-verified'
 }
 
 // =============================================================================

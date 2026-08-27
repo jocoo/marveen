@@ -39,6 +39,7 @@ import {
   parkedInputText, shouldClearTruncatedPreamble,
   parkedInputRowCount, submitLanded, decideStuckInputAction,
   parkedScheduledTaskInput, parkedMachineOriginInput, parkedMainInputHasRemedy,
+  detectsPastePlaceholder, enterVerifiedOutcome,
   type StuckInputState, type StuckInputThresholds, type StuckInputAction,
   type StuckInputActionFacts,
 } from '../pane-state.js'
@@ -224,6 +225,12 @@ const agentStuckInput: Map<string, StuckInputState> = new Map()
 // (it submits the REAL buffer, no capture-truncation risk); re-inject is the
 // fallback for a TUI that swallows the Enter in raw-mode.
 const MAIN_STUCK_ENTER_ATTEMPTS = 2
+// How long to let the TUI redraw before reading the box back after a verified
+// Enter (STUCKENTER384). Too short and a pane that DID submit still reads
+// 'typing', which would log a false "did not land"; the #384 probe settled at
+// 1.5s, so match it. Only ever paid on the 'enter-verified' branch, which is
+// itself rare (a stuck multi-row park past the 90s confirm window).
+const ENTER_VERIFY_SETTLE_MS = 1_500
 const MAIN_STUCK_THRESHOLDS: StuckInputThresholds = {
   // Same text must stay parked this long before the first recovery action so a
   // turn about to submit on its own is not pre-empted (>=2 observations at the
@@ -354,6 +361,7 @@ export async function recoverStuckInputForSession(
       hasPlainText: allowPlainReinject && parkedInputText(pane) != null,
       scheduledTaskBlock: parkedScheduledTaskInput(pane),
       machineOrigin: parkedMachineOriginInput(pane),
+      pastePlaceholder: detectsPastePlaceholder(pane),
     }
     const action = decideStuckInputAction(facts)
     await performStuckInputAction(session, action, pane, block, sig, attempt)
@@ -441,6 +449,39 @@ async function performStuckInputAction(
         execFileSync(tmuxBin(), ['send-keys', '-t', session, 'Enter'], { timeout: 5000 })
         submitted = true
         break
+      case 'enter-verified': {
+        // STUCKENTER384: a multi-row park with NO paste placeholder. Measured to
+        // submit on a bare Enter (card #384, 2026-08-27), but verified here
+        // rather than trusted -- and verified STRICTLY, because the failure mode
+        // (a newline inserted instead of a submit) also changes the signature
+        // submitLanded() keys on. Handled inline and returns: it must not fall
+        // through to the shared submitLanded() check below.
+        await dismissModelConsentDialogIfPresent(session)
+        logger.warn({ session, attempt, rows: parkedInputRowCount(paneBefore) }, 'Stuck input -- multi-row verbatim park (no paste placeholder), sending verified Enter')
+        execFileSync(tmuxBin(), ['send-keys', '-t', session, 'Enter'], { timeout: 5000 })
+        // The TUI needs a beat to redraw before the box can be read back; the
+        // probe run used 1.5s, so stay in that range rather than racing it.
+        await delay(ENTER_VERIFY_SETTLE_MS)
+        const outcome = enterVerifiedOutcome(paneBefore, captureParkedInputView(session))
+        if (outcome === 'newline-inserted') {
+          // Undo the newline: leaves the buffer byte-identical and keeps the
+          // spell's attempts budget from restarting on a changed signature.
+          try {
+            execFileSync(tmuxBin(), ['send-keys', '-t', session, 'BSpace'], { timeout: 5000 })
+          } catch (err) {
+            logger.warn({ err, session, attempt }, 'Stuck input -- verified Enter rollback (BSpace) failed; buffer holds one extra newline')
+          }
+        }
+        logger.warn(
+          { session, action, attempt, outcome },
+          outcome === 'landed'
+            ? 'Stuck input -- verified Enter landed'
+            : outcome === 'newline-inserted'
+              ? 'Stuck input -- verified Enter inserted a newline (upstream invariant held here), rolled back; escalating next tick within budget'
+              : 'Stuck input -- verified Enter did NOT land (swallowed); escalating next tick within budget',
+        )
+        return
+      }
       case 'hold':
         logger.warn({ session, attempt }, 'Stuck input -- multi-row/truncated, holding (no bare-Enter; awaiting keystroke fix)')
         break

@@ -2,8 +2,10 @@ import { describe, it, expect } from 'vitest'
 import {
   decideStuckInputAction,
   submitLanded,
+  enterVerifiedOutcome,
   parkedInputRowCount,
   stuckInputSignature,
+  detectsPastePlaceholder,
   type StuckInputActionFacts,
 } from '../pane-state.js'
 
@@ -51,6 +53,7 @@ function facts(over: Partial<StuckInputActionFacts>): StuckInputActionFacts {
     hasPlainText: false,
     scheduledTaskBlock: false,
     machineOrigin: false,
+    pastePlaceholder: false,
     ...over,
   }
 }
@@ -207,5 +210,107 @@ describe('parkedInputRowCount', () => {
 
   it('idle / empty box -> 0', () => {
     expect(parkedInputRowCount(IDLE)).toBe(0)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// STUCKENTER384: verified Enter on a multi-row park with no paste placeholder.
+// ---------------------------------------------------------------------------
+
+// A parked `[Pasted text #N]` stub: the ONE state where a bare Enter is proven
+// not to submit (it expands the stub instead).
+const PARKED_PASTE_PLACEHOLDER = [
+  '',
+  SEP,
+  '❯ [Pasted text #3 +412 lines]',
+  SEP,
+  FOOTER,
+].join('\n')
+
+// The multi-row park AFTER an Enter that inserted a newline instead of
+// submitting: same text, one row more (the buffer grew, the box did not clear).
+const PARKED_CHANNEL_MULTIROW_PLUS_NEWLINE = [
+  '',
+  SEP,
+  '❯ <channel source="plugin:telegram" chat_id="123">Szia, ez egy jó',
+  '  hosszú üzenet ami több sorba tördelődött a terminál szélén és',
+  '  több vizuális sort foglal el a beviteli dobozban</channel>',
+  '  .',
+  SEP,
+  FOOTER,
+].join('\n')
+
+describe('decideStuckInputAction: multi-row verbatim park (STUCKENTER384)', () => {
+  it('multi-row, no placeholder, no safe re-inject -> verified Enter instead of hold', () => {
+    // The measured case (card #384, 2026-08-27): a 9-row wrap-only verbatim
+    // park with placeholder=false SUBMITTED on a bare Enter. Before this fix
+    // the same facts returned 'hold' and every occurrence needed a human.
+    expect(decideStuckInputAction(facts({ rowCount: 9 }))).toBe('enter-verified')
+  })
+
+  it('a parked paste placeholder still holds: Enter only EXPANDS the stub', () => {
+    // The unmeasured half (case C of the probe): after the stub expands, the
+    // upstream invariant may well hold on the expanded buffer. Not measured ->
+    // not permitted.
+    expect(decideStuckInputAction(facts({ rowCount: 9, pastePlaceholder: true }))).toBe('hold')
+  })
+
+  it('truncated <channel> block goes to verified Enter -- the buffer is intact, only the DISPLAY is cut', () => {
+    // Re-injecting it would answer the wrong chat_id (the id is off-screen);
+    // the Enter submits the real buffer, id included.
+    expect(decideStuckInputAction(facts({ rowCount: 5, blockTruncated: true }))).toBe('enter-verified')
+    expect(decideStuckInputAction(facts({ rowCount: 5, blockTruncated: true, pastePlaceholder: true }))).toBe('hold')
+  })
+
+  it('a truncated safety preamble still holds -- clear-preamble is the right move next tick', () => {
+    expect(decideStuckInputAction(facts({ rowCount: 5, truncatedPreamble: true, escalate: false }))).toBe('hold')
+    expect(decideStuckInputAction(facts({ rowCount: 5, truncatedPreamble: true, escalate: true }))).toBe('clear-preamble')
+  })
+
+  it('single-row is unchanged: the plain legacy Enter, not the verified one', () => {
+    expect(decideStuckInputAction(facts({ rowCount: 1 }))).toBe('enter')
+  })
+
+  it('the safe re-inject paths still win over the verified Enter', () => {
+    expect(decideStuckInputAction(facts({ rowCount: 4, blockComplete: true }))).toBe('reinject-block')
+    expect(decideStuckInputAction(facts({ rowCount: 4, scheduledTaskBlock: true }))).toBe('clear-scheduled')
+    expect(decideStuckInputAction(facts({
+      rowCount: 4, allowPlainReinject: true, hasPlainText: true, machineOrigin: true,
+    }))).toBe('reinject-plain')
+  })
+
+  it('the discriminator reads the real fixtures the way the decision assumes', () => {
+    expect(detectsPastePlaceholder(PARKED_PASTE_PLACEHOLDER)).toBe(true)
+    expect(detectsPastePlaceholder(PARKED_CHANNEL_MULTIROW)).toBe(false)
+  })
+})
+
+describe('enterVerifiedOutcome (strict post-Enter check)', () => {
+  it('box left the parked state -> landed', () => {
+    expect(enterVerifiedOutcome(PARKED_CHANNEL_MULTIROW, IDLE)).toBe('landed')
+  })
+
+  it('still parked and one row longer -> newline-inserted (caller rolls it back)', () => {
+    expect(enterVerifiedOutcome(PARKED_CHANNEL_MULTIROW, PARKED_CHANNEL_MULTIROW_PLUS_NEWLINE))
+      .toBe('newline-inserted')
+  })
+
+  it('still parked, same size -> unconfirmed (swallowed Enter, nothing to undo)', () => {
+    expect(enterVerifiedOutcome(PARKED_CHANNEL_MULTIROW, PARKED_CHANNEL_MULTIROW)).toBe('unconfirmed')
+  })
+
+  it('no capture -> unconfirmed, never assumed landed', () => {
+    expect(enterVerifiedOutcome(PARKED_CHANNEL_MULTIROW, null)).toBe('unconfirmed')
+  })
+
+  it('submitLanded() would MISREAD the newline case -- which is why this exists', () => {
+    // The whole reason for a second predicate: an inserted newline changes the
+    // parked signature, so the signature-based check reports a false "landed"
+    // on the exact failure the verified-Enter branch must survive.
+    const prev = stuckInputSignature(PARKED_CHANNEL_MULTIROW)
+    expect(prev).not.toBeNull()
+    expect(submitLanded(prev!, PARKED_CHANNEL_MULTIROW_PLUS_NEWLINE)).toBe(true)
+    expect(enterVerifiedOutcome(PARKED_CHANNEL_MULTIROW, PARKED_CHANNEL_MULTIROW_PLUS_NEWLINE))
+      .toBe('newline-inserted')
   })
 })
