@@ -1,29 +1,22 @@
-# 💭 Dream Engine — 2026-08-25 02:07
+# 💭 Dream Engine — 2026-08-28 02:07
 
 ## 💡 Skill-javaslatok
+Ma élőben 5 skill lett patchelve/létrehozva a heartbeat-ciklusokban: `stuck-multiline-input-recovery`, `financials-watchdog-alert-triage`, `gmail-oauth-reauth` (ez utóbbiba került bele a gongrzhe-npm-prefix 4. előfordulásának teljes diagnózisa és a tartós fix útja is), `tmux-mass-restart-oom-triage`, és `creative-ideation-fanout` (a szülinapi projekt koordinációs tanulságaival: fájl-útvonal stabilitás, mobil-viewport teszt, pacing-kommunikáció). Ezeken felül egy éjszakai javaslat:
 
-Ma (08-24) élőben patchelve/létrehozva: `stuck-multiline-input-recovery` (új skill + 2 patch, Cuzcoo) — a be nem küldött, beragadt tmux-input diagnózisa és kézi Enter-fixe, plusz a teljes-restart eszkaláció ha az nem elég (3. előfordulásnál már kellett); `cross-agent-screenshot-and-decision-relay` (új skill + 1 patch, Cuzcoo) — Jocoo-Telegram-képernyőkép relay egy másik sub-agent szakterületéhez, plusz az élő hibakeresés közbeni üzenet-lemaradási minta.
-
-Ezen felül egy új javaslat: Kronk memóriáiban kétszer, egymástól függetlenül dokumentálva bukkant fel ugyanaz a workaround a marveen vitest suite live-install guardja körül (git worktree + node_modules symlink + fájlmásolás, mert a `store/.dashboard-token` jelenléte miatt a teszt-suite megtagadja a futást az élő installon). Mivel ez már kétszer kézzel le lett vezetve ugyanazon a napon, érdemes lenne Kronknak egy dedikált skillbe önteni.
+- **Új skill: video/kép-produkciós receptek (agent: Chaca, megosztva Tipo/Mata felé)** — a szülinapi film alatt Chaca 6 külön memóriában rögzített technikai buktatót (recraft-crisp-upscale WebP-t ad `.png` kiterjesztéssel — magic byte audit kell; Ken Burns zoom-plafon pontos képlete Z_max=W/(W-2x); multi-reference avatar-konzisztencia prompt-recept nano-banana-hoz; checksum-alapú asset-verziózás dátum helyett). Ezek jelenleg csak memóriában szórtan élnek, nincs egy skill ami összefogná őket, pedig a #206-os crochet-short projekt (in_progress, Mata) hamarosan ugyanezt a pipeline-t fogja használni.
 
 ## 🧹 Memória-egészség
-
-1208 / 1208 vektorizált (1 hiányzó embedding pótolva backfill-lel). 4 antikvált (7+ napos, nem hivatkozott) hot-tier memória cold-tier-be mozgatva (egy korábbi Surface Pro TV-ötlet, két 08-17-i #359 Surface-szál bejegyzés, egy régi skip-skill jegyzet). A már ismert 2 duplikátum-pár ("Szeretem a kávét", "Mai megbeszelés eredménye") továbbra is cold-tier-ben, nincs változás.
+1287 / 1287 vektorizált (1 hiányzó backfill-elve), 20 antikvált hot memória (>7 napos, mind lezárt téma: régi skip-skill bejegyzések, #362 SQLCipher incidens, Surface-leállás) cold-tier-be mozgatva. 2 pontos duplikátum (`Szeretem a kavét`, `Mai megbeszeles eredmenye`, egyenként 4x) — ezek már eleve cold-tier teszt-adatok, nem mozgattam tovább.
 
 ## 🎯 Top-3 holnapi javaslat
-
-1. HomeLab: #350 (*arr stack + uTorrent bekötés) — a nap legaktívabb szála, technikailag kész (letöltő-kliens bekötve Radarr+Sonarr-ba, útvonal-fordítás, megosztott mappa írás-tesztelve), csak a valódi végpontig-tesztelt letöltés maradt hátra. Jocoo A utat választotta (valódi indexer/tracker), de holnapra halasztotta.
-2. Infra: #384 (stuck multi-row input, auto-recovery gyökér-oka) — ma este háromszor fordult elő (Kronk 1x, Chicha 2x), a harmadiknál már kézi Enter sem oldotta meg, teljes agent-restart kellett, prioritás emelve high-ra.
-3. Scouts: #143 (den-leltár lista, aktív kölcsönzések felmérésével) — high priority, régóta nyitva, valós határidős kötelezettség Jocoo Quartermaster szerepéből.
-
-(#531fe752, Financials Published P&L Looker-szűrés, kimaradt a listából annak ellenére hogy high priority: Jocoo 2026-08-05-én explicit megállította, "nem fontos most", a döntés érvényben marad, ő hozza elő ha aktuális lesz.)
+1. Marveen_Env: #384 (stuck multi-row input) — reggel MANUÁLISAN vond vissza a `web/index.html`-ben az uncommitted szülinapi easter egget (`git checkout -- web/index.html`), utána futtasd újra a 34 tesztet a c9c2f50 commit-on, és ha zöld, kérj restart-confirmet Jocootól — ez az egyetlen blokkoló, aktív tétel, minden más rajta várakozik (git-műveletek az easter egg miatt jelenleg veszélyesek).
+2. Financials: #276 (Published P&L nem FY26-ra szűrt, Looker forrás) — high priority, `waiting` állapotban ragadt, 3+ napja nincs rajta mozgás, pénzügyi pontossági kockázat.
+3. HomeLab: #347 (Surface home-server + TV, WiFi átállás + DisplayPort→HDMI lánc) — `in_progress` 2+ napja mozdulatlan Kronknál, érdemes megkérdezni státuszt mielőtt tovább stagnál.
 
 ## 🌐 External opportunity
-
-Skip — heti limit nem telt le (utolsó futás 6.0 napja, a 7 napos ablak még nem zárult le).
+[oguzhnatly/fleet](https://github.com/oguzhnatly/fleet) — multi-agent fleet management CLI kifejezetten Claude Code-hoz: monitorozás, megbízhatóság-értékelés, intelligens routing runtime-ok között. Relevancia: ez pontosan a saját flotta-menedzsment problémánk (Cuzcoo mint karmester több sub-agent felett), érdemes megnézni fed-e le olyat amit most kézzel csinálunk (pl. session health, restart-triázs). Csillagszám és aktivitás WebSearch-ből NEM ellenőrizhető megbízhatóan — mielőtt bármit is bevezetnétek belőle, nézzétek meg a repót közvetlenül.
 
 ## 🛠 Skill-flotta health
+Nincs megbízható használat-log a nem-pinned skillekhez (101 db) — a fájl-módosítási idő NEM azonos a használattal, ezért heurisztikus "antikvált" riasztást szándékosan nem adok ki, mert hamis pozitív lenne. Ha ez fontos, egy tényleges use-log (pl. Skill-hívás naplózása a dashboardon) kellene előbb.
 
-A nulla `skill_usage`-gal álló, nem-pinned, 30+ napja nem módosított skillek listája mára 27-re nőtt (a tegnap még 5 elemű listáról) — ez már a többszöri éjszakai halasztás jele, a mtime-only jelöltek közül ennyi valóban aktivitás nélküli. Javaslat: ez a bucket most már döntést igényel Jocootól vagy Kronktól, nem újabb éjszakai puszta-jelzést — érdemes egy dedikált kézi audit-kört tartani (törlés vagy megtartás-indoklás soronként), mielőtt a lista tovább nő.
-
-*Marveen, 02:19 — most már alszom én is.*
+*Marveen, 02:41 — most már alszom én is.*
