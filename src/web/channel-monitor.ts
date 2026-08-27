@@ -39,7 +39,7 @@ import {
   parkedInputText, shouldClearTruncatedPreamble,
   parkedInputRowCount, submitLanded, decideStuckInputAction,
   parkedScheduledTaskInput, parkedMachineOriginInput, parkedMainInputHasRemedy,
-  detectsPastePlaceholder, enterVerifiedOutcome,
+  detectsPastePlaceholder, enterVerifiedOutcome, parkedMachineTailMarker,
   type StuckInputState, type StuckInputThresholds, type StuckInputAction,
   type StuckInputActionFacts,
 } from '../pane-state.js'
@@ -362,9 +362,10 @@ export async function recoverStuckInputForSession(
       scheduledTaskBlock: parkedScheduledTaskInput(pane),
       machineOrigin: parkedMachineOriginInput(pane),
       pastePlaceholder: detectsPastePlaceholder(pane),
+      machineTail: parkedMachineTailMarker(pane),
     }
     const action = decideStuckInputAction(facts)
-    await performStuckInputAction(session, action, pane, block, sig, attempt)
+    await performStuckInputAction(session, action, pane, block, sig, attempt, facts)
   }
   return decision.next
 }
@@ -382,6 +383,7 @@ async function performStuckInputAction(
   block: ReturnType<typeof parkedChannelInput>,
   prevSig: string | null,
   attempt: number,
+  facts: StuckInputActionFacts,
 ): Promise<void> {
   let submitted = false
   try {
@@ -483,7 +485,24 @@ async function performStuckInputAction(
         return
       }
       case 'hold':
-        logger.warn({ session, attempt }, 'Stuck input -- multi-row/truncated, holding (no bare-Enter; awaiting keystroke fix)')
+        // Log WHICH evidence was missing. The 2026-08-24 spells (card #384)
+        // could not be re-checked against this log afterwards because it
+        // recorded only "holding" -- there was no way to tell a paste stub from
+        // an origin-unknown park, which is exactly the distinction the gate now
+        // turns on. `facts` is machine-derived; no parked TEXT is logged.
+        logger.warn(
+          {
+            session,
+            attempt,
+            rowCount: facts.rowCount,
+            pastePlaceholder: facts.pastePlaceholder,
+            truncatedPreamble: facts.truncatedPreamble,
+            machineOrigin: facts.machineOrigin,
+            machineTail: facts.machineTail,
+            blockTruncated: facts.blockTruncated,
+          },
+          'Stuck input -- holding (no non-lossy move: paste stub, stale preamble, or origin not provably machine)',
+        )
         break
     }
   } catch (err) {

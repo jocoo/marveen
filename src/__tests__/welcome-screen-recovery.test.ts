@@ -49,21 +49,23 @@ describe('welcome-screen wedge: detection -> recovery decision (real fixture)', 
     expect(parkedInputRowCount(QWEN_WELCOME_WEDGE)).toBeGreaterThan(1)
   })
 
-  it('STUCKENTER384: the wedge now gets a VERIFIED Enter, and still no lossy rescue', () => {
-    // POLICY CHANGE 2026-08-05 (kept): this fixture's parked text begins
-    // mid-sentence ("kepet: /Users/marvin/...") -- the head rows were already
-    // dropped by the TUI, and no machine marker survives in the visible box.
-    // Re-injecting it (reinject-plain) is exactly the lossy rescue that
-    // delivered byte-identical truncated prompts at 15:06/16:00: the scrape IS
-    // a fragment. Clearing is no better -- origin is uncertain here, and a
-    // human's text has no re-delivery. Both stay forbidden.
+  it('recovery HOLDS the wedge: the parked fragment has no surviving machine marker (STUCKINPUT805)', () => {
+    // POLICY CHANGE 2026-08-05: this fixture's parked text begins mid-sentence
+    // ("kepet: /Users/marvin/...") -- the head rows were already dropped by
+    // the TUI, and no machine marker survives in the visible box. The old
+    // decision re-injected it (reinject-plain), which is exactly the lossy
+    // rescue that delivered byte-identical truncated prompts at 15:06/16:00:
+    // the scrape IS a fragment, re-injecting it ships corruption. And origin
+    // is genuinely uncertain here (agent-terminal reaches sub-agent panes), so
+    // clearing could destroy a human's un-re-deliverable text. Hands off, log;
+    // the down-cascade's own agent recovery handles a persistently wedged pane.
     //
-    // REFINEMENT 2026-08-27 (card #384): 'hold' meant EVERY such wedge needed a
-    // human to press Enter (6 spells across two agents on 2026-08-24 alone).
-    // A bare Enter is the one remedy that is NOT lossy here: it submits the
-    // real buffer, head rows included -- the TUI truncated the DISPLAY, not the
-    // buffer. Measured to submit on a 9-row placeholder-free park (#384 probe),
-    // and the caller verifies it landed rather than assuming.
+    // STUCKENTER384 (2026-08-27) does NOT reach this fixture, on purpose. The
+    // verified Enter is not lossy -- it submits the real buffer -- but it is
+    // still a SUBMIT, and "no machine marker survives" is precisely the state
+    // where the buffer may be a human's half-written draft. Positive evidence
+    // is required; this fixture has none, so it keeps holding. If the wrapper's
+    // closing tag had survived (MACHINE_ORIGIN_TAIL_MARKERS) it would qualify.
     const wedgeFacts = {
       escalate: true,
       rowCount: parkedInputRowCount(QWEN_WELCOME_WEDGE),
@@ -75,10 +77,14 @@ describe('welcome-screen wedge: detection -> recovery decision (real fixture)', 
       scheduledTaskBlock: false,
       machineOrigin: false, // computed: no prefix, no truncated marker survives
       pastePlaceholder: false,
+      machineTail: false, // computed: the closing tag did not survive either
     }
-    expect(decideStuckInputAction(wedgeFacts)).toBe('enter-verified')
+    expect(decideStuckInputAction(wedgeFacts)).toBe('hold')
+    // Same fixture, but with the wrapper tail surviving the truncation: now it
+    // is provably ours, and the non-lossy submit is allowed.
+    expect(decideStuckInputAction({ ...wedgeFacts, machineTail: true })).toBe('enter-verified')
     // The unsafe half of the discriminator is unchanged: a parked paste stub
-    // does NOT submit on Enter (it expands), so it still holds.
-    expect(decideStuckInputAction({ ...wedgeFacts, pastePlaceholder: true })).toBe('hold')
+    // does NOT submit on Enter (it expands), so it holds either way.
+    expect(decideStuckInputAction({ ...wedgeFacts, machineTail: true, pastePlaceholder: true })).toBe('hold')
   })
 })

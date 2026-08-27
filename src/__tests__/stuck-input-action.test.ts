@@ -6,6 +6,8 @@ import {
   parkedInputRowCount,
   stuckInputSignature,
   detectsPastePlaceholder,
+  parkedMachineTailMarker,
+  parkedMachineOriginInput,
   type StuckInputActionFacts,
 } from '../pane-state.js'
 
@@ -54,6 +56,7 @@ function facts(over: Partial<StuckInputActionFacts>): StuckInputActionFacts {
     scheduledTaskBlock: false,
     machineOrigin: false,
     pastePlaceholder: false,
+    machineTail: false,
     ...over,
   }
 }
@@ -68,9 +71,17 @@ describe('decideStuckInputAction (recovery-decision unit)', () => {
     expect(a).not.toBe('enter')
   })
 
-  it('multi-row truncated <channel> block -> hold (no Enter, no wrong-chat_id re-inject)', () => {
+  it('multi-row truncated <channel> block -> verified Enter (STUCKENTER384 flip), never a wrong-chat_id re-inject', () => {
+    // WAS 'hold' until 2026-08-27. The re-inject stays forbidden for the same
+    // reason as ever (the chat_id is off-screen, so the scrape would answer
+    // the WRONG chat), but holding was never the only alternative: the buffer
+    // itself is intact -- only the DISPLAY is cut -- so submitting it delivers
+    // the real message, id included. blockTruncated also requires a visible
+    // `<channel source="plugin:` (parkedChannelInput returns null otherwise),
+    // which is the machine-origin evidence noReinjectTail() demands.
     const a = decideStuckInputAction(facts({ rowCount: 2, blockTruncated: true, escalate: true }))
-    expect(a).toBe('hold')
+    expect(a).toBe('enter-verified')
+    expect(a).not.toBe('reinject-block')
   })
 
   it('multi-row sub-agent MACHINE-marked plain text -> re-inject plain, never enter', () => {
@@ -241,18 +252,29 @@ const PARKED_CHANNEL_MULTIROW_PLUS_NEWLINE = [
 ].join('\n')
 
 describe('decideStuckInputAction: multi-row verbatim park (STUCKENTER384)', () => {
-  it('multi-row, no placeholder, no safe re-inject -> verified Enter instead of hold', () => {
+  it('multi-row MACHINE park, no placeholder, no safe re-inject -> verified Enter instead of hold', () => {
     // The measured case (card #384, 2026-08-27): a 9-row wrap-only verbatim
     // park with placeholder=false SUBMITTED on a bare Enter. Before this fix
     // the same facts returned 'hold' and every occurrence needed a human.
-    expect(decideStuckInputAction(facts({ rowCount: 9 }))).toBe('enter-verified')
+    expect(decideStuckInputAction(facts({ rowCount: 9, machineOrigin: true }))).toBe('enter-verified')
   })
 
-  it('a parked paste placeholder still holds: Enter only EXPANDS the stub', () => {
+  it('the SAME park with no origin evidence still holds -- STUCKINPUT805 is not repealed', () => {
+    // The probe measured the TUI mechanism on an inter-agent frame; it never
+    // touched hand-typed text. Absence of a paste placeholder says nothing
+    // about who typed the buffer, and the watcher acts after a 90s confirm
+    // window -- long enough for a human to have walked away mid-draft.
+    expect(decideStuckInputAction(facts({ rowCount: 9 }))).toBe('hold')
+    expect(decideStuckInputAction(facts({
+      rowCount: 9, allowPlainReinject: true, hasPlainText: true, machineOrigin: false, escalate: true,
+    }))).toBe('hold')
+  })
+
+  it('a parked paste placeholder still holds even WITH machine evidence: Enter only EXPANDS the stub', () => {
     // The unmeasured half (case C of the probe): after the stub expands, the
     // upstream invariant may well hold on the expanded buffer. Not measured ->
     // not permitted.
-    expect(decideStuckInputAction(facts({ rowCount: 9, pastePlaceholder: true }))).toBe('hold')
+    expect(decideStuckInputAction(facts({ rowCount: 9, machineOrigin: true, pastePlaceholder: true }))).toBe('hold')
   })
 
   it('truncated <channel> block goes to verified Enter -- the buffer is intact, only the DISPLAY is cut', () => {
@@ -263,8 +285,8 @@ describe('decideStuckInputAction: multi-row verbatim park (STUCKENTER384)', () =
   })
 
   it('a truncated safety preamble still holds -- clear-preamble is the right move next tick', () => {
-    expect(decideStuckInputAction(facts({ rowCount: 5, truncatedPreamble: true, escalate: false }))).toBe('hold')
-    expect(decideStuckInputAction(facts({ rowCount: 5, truncatedPreamble: true, escalate: true }))).toBe('clear-preamble')
+    expect(decideStuckInputAction(facts({ rowCount: 5, machineOrigin: true, truncatedPreamble: true, escalate: false }))).toBe('hold')
+    expect(decideStuckInputAction(facts({ rowCount: 5, machineOrigin: true, truncatedPreamble: true, escalate: true }))).toBe('clear-preamble')
   })
 
   it('single-row is unchanged: the plain legacy Enter, not the verified one', () => {
@@ -282,6 +304,70 @@ describe('decideStuckInputAction: multi-row verbatim park (STUCKENTER384)', () =
   it('the discriminator reads the real fixtures the way the decision assumes', () => {
     expect(detectsPastePlaceholder(PARKED_PASTE_PLACEHOLDER)).toBe(true)
     expect(detectsPastePlaceholder(PARKED_CHANNEL_MULTIROW)).toBe(false)
+  })
+
+  it('a surviving wrapper TAIL is machine evidence in its own right', () => {
+    // The #384 shape: a head-lost inter-agent frame. Every anchored prefix is
+    // gone with the dropped rows, so machineOrigin misses -- but the closing
+    // tag at the end survives, and that is enough to submit (the Enter sends
+    // the real buffer, so the lost head costs nothing).
+    expect(decideStuckInputAction(facts({ rowCount: 7, machineTail: true }))).toBe('enter-verified')
+    expect(decideStuckInputAction(facts({ rowCount: 7 }))).toBe('hold')
+  })
+
+  it('a surviving tail does NOT unlock the lossy scrape re-inject', () => {
+    // The whole point of keeping machineTail out of machineOrigin: on a
+    // head-lost frame the visible box IS a fragment, so reinject-plain would
+    // ship the STUCKINPUT805 corruption. Only the non-lossy submit is unlocked.
+    const a = decideStuckInputAction(facts({
+      rowCount: 7, machineTail: true, allowPlainReinject: true, hasPlainText: true, escalate: true,
+    }))
+    expect(a).toBe('enter-verified')
+    expect(a).not.toBe('reinject-plain')
+  })
+})
+
+describe('parkedMachineTailMarker (head-lost frame evidence, STUCKENTER384)', () => {
+  // A head-lost inter-agent frame: the TEAM MEMBER NOTICE preamble and the
+  // <trusted-peer> opening tag were dropped with the leading rows; the box
+  // begins mid-sentence and only the closing tag survives.
+  const HEAD_LOST_PEER_FRAME = [
+    '',
+    SEP,
+    '❯ tesztet, aztan jelentkezz. A worktree ~/claw-test-384-ban van, npm',
+    '  install mar lefutott ott. </trusted-peer>',
+    SEP,
+    FOOTER,
+  ].join('\n')
+
+  // The same shape a HUMAN produces: a long multi-row draft, no wrapper syntax.
+  const HUMAN_MULTIROW_DRAFT = [
+    '',
+    SEP,
+    '❯ Kronk, nezd meg legyszi a stuck-input watchert holnap reggel, mert',
+    '  szerintem megint beragadt valami az ejszaka es nem tudom eldonteni',
+    '  hogy a watcher hibaja-e vagy csak en nyomtam el valamit',
+    SEP,
+    FOOTER,
+  ].join('\n')
+
+  it('head-lost peer frame: origin misses, tail hits', () => {
+    expect(parkedMachineOriginInput(HEAD_LOST_PEER_FRAME)).toBe(false)
+    expect(parkedMachineTailMarker(HEAD_LOST_PEER_FRAME)).toBe(true)
+  })
+
+  it('a human draft trips neither -- it keeps holding (STUCKINPUT805)', () => {
+    expect(parkedMachineOriginInput(HUMAN_MULTIROW_DRAFT)).toBe(false)
+    expect(parkedMachineTailMarker(HUMAN_MULTIROW_DRAFT)).toBe(false)
+    expect(parkedInputRowCount(HUMAN_MULTIROW_DRAFT)).toBeGreaterThan(1)
+  })
+
+  it('a complete parked <channel> block also carries the tail', () => {
+    expect(parkedMachineTailMarker(PARKED_CHANNEL_MULTIROW)).toBe(true)
+  })
+
+  it('an idle box has no tail', () => {
+    expect(parkedMachineTailMarker(IDLE)).toBe(false)
   })
 })
 

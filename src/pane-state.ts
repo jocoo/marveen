@@ -1295,6 +1295,30 @@ const MACHINE_ORIGIN_TRUNCATED_MARKERS = [
   /fired by the local scheduler/,
 ] as const
 
+// Wrapper CLOSING tags. Where MACHINE_ORIGIN_TRUNCATED_MARKERS catches a
+// head-lost SCHEDULED tick, these catch a head-lost inter-agent/channel frame:
+// the TUI drops the LEADING rows of an overfull box, so the anchored prefixes
+// above miss while the closing tag at the very end survives. That is the
+// discriminator card #384 actually asked for ("lezart tag-gel vegzodik").
+//
+// Safe as machine evidence because prompt-safety.ts SCRUBS these exact tag
+// names out of every wrap payload (SECURITY_TAG_NAMES / SECURITY_TAG_RX), so a
+// `</trusted-peer>` inside the box cannot have arrived as delivered content --
+// it is either our own wrapper or something a human typed by hand. The same
+// hand-typed caveat already applies to `</scheduled-task>` in the list above.
+//
+// Deliberately a SEPARATE list from MACHINE_ORIGIN_TRUNCATED_MARKERS, and read
+// by a SEPARATE predicate (parkedMachineTailMarker), because the two existing
+// consumers of that list must NOT see these: parkedScheduledTaskInput would
+// misread a head-lost inter-agent frame as a scheduled tick and clear it (an
+// inter-agent message, unlike a schedule fire, is never re-delivered), and
+// parkedMachineOriginInput gates the lossy scrape re-inject.
+const MACHINE_ORIGIN_TAIL_MARKERS = [
+  /<\/trusted-peer>/,
+  /<\/untrusted>/,
+  /<\/channel>/,
+] as const
+
 // True when the live input box holds parked ('typing') text that is
 // identifiably machine-injected (see MACHINE_ORIGIN_PREFIXES). Pure.
 export function parkedMachineOriginInput(pane: string): boolean {
@@ -1302,6 +1326,24 @@ export function parkedMachineOriginInput(pane: string): boolean {
   if (flat == null) return false
   return MACHINE_ORIGIN_PREFIXES.some((rx) => rx.test(flat))
     || MACHINE_ORIGIN_TRUNCATED_MARKERS.some((rx) => rx.test(flat))
+}
+
+// True when a wrapper CLOSING tag survives in the box (see
+// MACHINE_ORIGIN_TAIL_MARKERS). Kept OUT of parkedMachineOriginInput on
+// purpose: that predicate gates the reinject-plain branch, whose payload is a
+// scrape of the VISIBLE box, and a head-lost frame is exactly the case where
+// the scrape is a FRAGMENT -- widening it there would re-open the STUCKINPUT805
+// corruption (a 10,509-char prompt re-delivered as its last ~400 chars). It
+// also gates the hard-restart carve-out, which is a separate decision.
+//
+// Its ONE consumer is the 'enter-verified' branch, where the payload is not a
+// scrape at all: the Enter submits the pane's real buffer, head rows included,
+// so a lost head costs nothing. There, "is this ours?" is the only question,
+// and a surviving `</trusted-peer>` answers it.
+export function parkedMachineTailMarker(pane: string): boolean {
+  const flat = parkedInputText(pane)
+  if (flat == null) return false
+  return MACHINE_ORIGIN_TAIL_MARKERS.some((rx) => rx.test(flat))
 }
 
 // True when the parked text is a scheduled-task injection (the scheduler's
@@ -1556,6 +1598,12 @@ export interface StuckInputActionFacts {
    * separates a safe multi-row Enter from an unsafe one (see the
    * 'enter-verified' branch below). */
   pastePlaceholder: boolean
+  /** parkedMachineTailMarker(pane): a wrapper CLOSING tag survives in the box.
+   * Positive machine-origin evidence for a HEAD-LOST frame, where every
+   * anchored prefix in machineOrigin has already scrolled out. Read ONLY by
+   * the 'enter-verified' gate -- see parkedMachineTailMarker for why it is not
+   * folded into machineOrigin. */
+  machineTail: boolean
 }
 
 /**
@@ -1589,6 +1637,12 @@ export interface StuckInputActionFacts {
  * was NOT reproducible in that run (the stub landed straight after expanding),
  * so it stays UNMEASURED and therefore stays forbidden here.
  *
+ * That probe measured the MECHANISM only, on an inter-agent frame. It is not a
+ * licence to submit anything multi-row: the move also needs positive evidence
+ * that the park is MACHINE-origin, or STUCKINPUT805 falls over (a human draft
+ * parked through the 90s confirm window would be submitted half-written). See
+ * noReinjectTail() below for the gate.
+ *
  * The move is 'enter-verified', not 'enter', because the caller must confirm
  * it with the STRICT check (enterVerifiedOutcome below), not with
  * submitLanded(): an inserted newline also changes the parked signature, so
@@ -1607,6 +1661,24 @@ export function decideStuckInputAction(f: StuckInputActionFacts): StuckInputActi
   const noReinjectTail = (): StuckInputAction => {
     if (!multiRow) return 'enter'
     if (f.pastePlaceholder || f.truncatedPreamble) return 'hold'
+    // STUCKINPUT805 still governs UNKNOWN origin. The #384 probe measured the
+    // TUI MECHANISM (a multi-row verbatim park does submit on a bare Enter);
+    // it says nothing about WHOSE text is parked, and it was run on an
+    // inter-agent frame, never on hand-typed input. Absence of a paste
+    // placeholder is not evidence of machine origin, so it cannot stand in for
+    // it: a human draft left in the box for the 90s confirm window would be
+    // submitted half-written. Positive evidence is required, and after the
+    // tail-marker list above a head-lost frame still has some:
+    //   - machineOrigin  -- an anchored wrapper prefix, or a head-lost
+    //                       scheduled-task marker;
+    //   - machineTail    -- a wrapper CLOSING tag survived the head loss. This
+    //                       is the #384 case, and the discriminator the card
+    //                       itself asked for ("lezart tag-gel vegzodik");
+    //   - blockTruncated -- `<channel source="plugin:` is visible in the box
+    //                       (parkedChannelInput returns null without it), so
+    //                       the park is ours even though the id is off-screen.
+    // No evidence -> hold, exactly as before this branch existed.
+    if (!f.machineOrigin && !f.machineTail && !f.blockTruncated) return 'hold'
     return 'enter-verified'
   }
   // Complete channel block: chat_id-safe verbatim re-inject. Multi-row is itself
@@ -1701,6 +1773,7 @@ export function parkedMainInputHasRemedy(pane: string): boolean {
     scheduledTaskBlock: parkedScheduledTaskInput(pane),
     machineOrigin: parkedMachineOriginInput(pane),
     pastePlaceholder: detectsPastePlaceholder(pane),
+    machineTail: parkedMachineTailMarker(pane),
   }
   const action = decideStuckInputAction(facts)
   // 'enter-verified' does NOT count as a remedy here, on purpose. This guard
