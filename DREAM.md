@@ -1,25 +1,23 @@
-# 💭 Dream Engine — 2026-08-31 02:07
-
-## ⚠️ Hibák
-Új blokkoló: a `git commit` a fő checkout-on (`/home/jocoo/marveen`) mostantól egy hook-kal (EVIDGUARD818 secret-gate) el van tiltva ("BLOCKED: commit on the running main checkout... Work in a worktree instead", override: `MARVEEN_PROD_COMMIT_OK=1`). Ez korábban rutinszerűen ment (ld. `1f2d4ac` 08-28-i commit), most viszont ismeretlen eredetű, új védelem. NEM force-oltam át az override-dal — nem tudtam este megkérdezni, és a szabály explicit kifejezetten a fő checkout védelmére szolgál (dashboard innen szolgál ki élő fájlokat). A DREAM.md tartalma a lemezen rendben van (a 07:30-as napindító ezt olvassa, nem git-en át), csak a git history nem frissült. Kérlek mondd meg: menjen-e az override rutinból a DREAM.md napi commitjaira, vagy tényleg worktree-be kell terelni ezt a munkafolyamatot.
+# 💭 Dream Engine — 2026-09-01 02:07
 
 ## 💡 Skill-javaslatok
-Ma élőben patchelve: `arr-stack-api-config` (Kronk, többször, a Forms-auth + Bithumen cookie-indexer + Bazarr-összekötés menete alapján, ld. daily log 11:05–13:10). Ezen felül a memóriákban visszatérő, még le nem fedett minta:
-- **Hardlink-alapú törlés/átnevezés buktató** (flotta-szintű, *arr-stack): ma kétszer is előkerült ugyanaz a csapda (a Radarr `delete+deleteFiles` csak a media-oldali nevet törli, a downloads-oldali másolat tartja a helyet; Sonarr renameEpisodes csak a media-oldalt nevezi át). Ez már 2. és 3. előfordulás egy napon belül, érdemes lenne az `arr-stack-api-config` skill Buktatók szekciójába emelni önálló alpontként — jelenleg csak a napi naplóban és a memóriákban van rögzítve.
+Ma élőben patchelve: `tmux-mass-restart-oom-triage` (a 08-27-i "lezárt" OOM-fix nem végleges, a 20:03-as cuzcoo-channels crash megismételte a mintázatot; a cgroup `oom_kill` számláló megbízhatatlan utólagos bizonyítékként), `kronk-deliverable-deploy-cycle` (peer SSH-kulcs-hozzáférés ≠ Jocoo saját konzol-hozzáférése, ne nyilváníts okafogyottá egy Jocoo-kérdést csak mert egy kapcsolódó út zöldre vált), és a `dream-engine` skill maga (napi commit worktree-alapúra állítva, ld. lent).
+
+Ezen felül egy még le nem fedett, flotta-szintű minta:
+- **Kronk ma egy kártyán (#402) belül három, egymástól független systemd/API-csapdát dokumentált** (StartLimitBurst/StartLimitIntervalSec csak `[Unit]`-ban érvényes, nem `[Service]`-ben; `Exec*` sorokban nincs shell parancs-behelyettesítés; a dashboard `/api/memories` biztonsági szűrője elutasítja a shell-mintát tartalmazó szöveget). Ez három külön, jövőben újra előkerülő buktató egyetlen memóriában eltemetve — érdemes lenne egy `systemd-user-unit-authoring` (agent: Kronk) skillbe kiemelni, mielőtt legközelebb valaki újra nekifut és újra megtalálja ugyanezt.
 
 ## 🧹 Memória-egészség
-1316 / 1316 vektorizált (1 hiányzó pótolva). 12 antikvált hot-tier memória (mind 2026-08-21 vagy régebbi, már lezárt kártyákra — #221, #348, #375 — vagy elavult skip-skill jegyzetekre vonatkozott) cold-tier-be mozgatva. Duplikátum-ellenőrzés: csak 2 db, egyértelműen teszt/fixture-tartalom ("Mai megbeszélés eredménye", "Szeretem a kávét", 4-4 példány) — valós tartalmi duplikátum nem volt.
+1345 / 1345 vektorizált (1 hiányzó — a mai napi napló bejegyzés — pótolva). 37 antikvált hot-tier memória (2026-08-17 és 08-24 közötti, már lezárt kártyákra — #355, #356, #357, #362, #372-375, #382 — és elavult skip-skill jegyzetekre vonatkozó) cold-tier-be mozgatva. Duplikátum-ellenőrzés: 8 db, mind a korábbi futásból már ismert teszt/fixture-tartalom ("Mai megbeszélés eredménye", "Szeretem a kávét", 4-4 példány, már cold-ban), új valós duplikátum nem volt.
 
 ## 🎯 Top-3 holnapi javaslat
-(Minden jelölt kommentjét átfutottam parkolás-jelzésért — a Home-server 4/4 kártya és a Financials Looker-ágon lévő tételek ki is estek emiatt, ld. lent.)
-1. HomeLab: #401 (link-átíró custom.js javítása, Kronknál) — Windows böngészőben megint Tailscale IP-vel próbál linket nyitni localhost helyett, aktív blokkoló a napi használatban, már kiküldve, csak visszajelzésre vár.
-2. Scouts: storage key felvétele (magas prioritás, Jocoo-nál) — a többi Scouts QM kártya (leltár a denben, insurance-tisztázás) ettől függ, jelenleg ez a láncszem hiányzik.
-3. Financials: UI (8791) dockerizálása (Kronknál, low) — az egyetlen nyitott Financials-tétel ami NEM a parkolt Looker-ágon lóg, nincs kommentben jelzett blokkoló, egyszerű infra-lépés.
+1. HomeLab: Home-server 4/4 (Kodi + képernyő-kikapcsolás + sztereó hang ellenőrzés, Kronknál, waiting) — a #404 (docker01 git-migráció) ma lezárult, a projekt momentuma magas, ez a természetes következő lépés ugyanabban a körben.
+2. Financials: Published P&L nem FY26-ra szűrt, Looker forrása (magas prioritás, cuzcoo-nál, waiting) — az egyetlen magas prioritású Financials-tétel, egy hete mozdulatlan, valós számviteli pontossági kockázatot hordoz.
+3. Scouts: storage key felvétele + den-leltár (mindkettő magas prioritás, Jocoo-nál, planned) — teljesen mozdulatlan a nyitás óta, a többi Scouts QM kártya ettől a két lépéstől függ, de ez agent-munkával nem előrevihető, csak Jocoo saját fizikai lépésével.
 
 ## 🌐 External opportunity
-Skip — heti limit nem telt le (utolsó futás 3 napja, a küszöb 7 nap).
+Skip — heti limit nem telt le (utolsó futás 4 napja, a küszöb 7 nap).
 
 ## 🛠 Skill-flotta health
-37 nem-pinned skill régebbi mint 30 nap, de a legrégebbiek (`skill-management`, `retrospective`, `skill-factory`, ~93-94 nap) alapinfrastruktúra-skillek, ritka triggerelés várható, nem törlésre valók. Konkrét jelölt: `docker-group-stale-session` (58 napja nem érintett, WSL2-specifikus egyszeri hiba, azóta nem ismétlődött) — frissítés vagy archiválás megfontolható, ha a fleet stabilan túl van a docker-group problémán.
+Nincs új antikvált jelölt a tegnapihoz képest — a korábban megjegyzett `docker-group-stale-session` (WSL2-specifikus, azóta nem ismétlődött probléma) továbbra is frissítés/archiválás-jelölt, de nem sürgős.
 
-*Marveen, 02:19 — most már alszom én is.*
+*Marveen, 02:09 — most már alszom én is.*
