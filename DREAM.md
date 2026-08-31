@@ -1,22 +1,25 @@
-# 💭 Dream Engine — 2026-08-28 02:07
+# 💭 Dream Engine — 2026-08-31 02:07
+
+## ⚠️ Hibák
+Új blokkoló: a `git commit` a fő checkout-on (`/home/jocoo/marveen`) mostantól egy hook-kal (EVIDGUARD818 secret-gate) el van tiltva ("BLOCKED: commit on the running main checkout... Work in a worktree instead", override: `MARVEEN_PROD_COMMIT_OK=1`). Ez korábban rutinszerűen ment (ld. `1f2d4ac` 08-28-i commit), most viszont ismeretlen eredetű, új védelem. NEM force-oltam át az override-dal — nem tudtam este megkérdezni, és a szabály explicit kifejezetten a fő checkout védelmére szolgál (dashboard innen szolgál ki élő fájlokat). A DREAM.md tartalma a lemezen rendben van (a 07:30-as napindító ezt olvassa, nem git-en át), csak a git history nem frissült. Kérlek mondd meg: menjen-e az override rutinból a DREAM.md napi commitjaira, vagy tényleg worktree-be kell terelni ezt a munkafolyamatot.
 
 ## 💡 Skill-javaslatok
-Ma élőben 5 skill lett patchelve/létrehozva a heartbeat-ciklusokban: `stuck-multiline-input-recovery`, `financials-watchdog-alert-triage`, `gmail-oauth-reauth` (ez utóbbiba került bele a gongrzhe-npm-prefix 4. előfordulásának teljes diagnózisa és a tartós fix útja is), `tmux-mass-restart-oom-triage`, és `creative-ideation-fanout` (a szülinapi projekt koordinációs tanulságaival: fájl-útvonal stabilitás, mobil-viewport teszt, pacing-kommunikáció). Ezeken felül egy éjszakai javaslat:
-
-- **Új skill: video/kép-produkciós receptek (agent: Chaca, megosztva Tipo/Mata felé)** — a szülinapi film alatt Chaca 6 külön memóriában rögzített technikai buktatót (recraft-crisp-upscale WebP-t ad `.png` kiterjesztéssel — magic byte audit kell; Ken Burns zoom-plafon pontos képlete Z_max=W/(W-2x); multi-reference avatar-konzisztencia prompt-recept nano-banana-hoz; checksum-alapú asset-verziózás dátum helyett). Ezek jelenleg csak memóriában szórtan élnek, nincs egy skill ami összefogná őket, pedig a #206-os crochet-short projekt (in_progress, Mata) hamarosan ugyanezt a pipeline-t fogja használni.
+Ma élőben patchelve: `arr-stack-api-config` (Kronk, többször, a Forms-auth + Bithumen cookie-indexer + Bazarr-összekötés menete alapján, ld. daily log 11:05–13:10). Ezen felül a memóriákban visszatérő, még le nem fedett minta:
+- **Hardlink-alapú törlés/átnevezés buktató** (flotta-szintű, *arr-stack): ma kétszer is előkerült ugyanaz a csapda (a Radarr `delete+deleteFiles` csak a media-oldali nevet törli, a downloads-oldali másolat tartja a helyet; Sonarr renameEpisodes csak a media-oldalt nevezi át). Ez már 2. és 3. előfordulás egy napon belül, érdemes lenne az `arr-stack-api-config` skill Buktatók szekciójába emelni önálló alpontként — jelenleg csak a napi naplóban és a memóriákban van rögzítve.
 
 ## 🧹 Memória-egészség
-1287 / 1287 vektorizált (1 hiányzó backfill-elve), 20 antikvált hot memória (>7 napos, mind lezárt téma: régi skip-skill bejegyzések, #362 SQLCipher incidens, Surface-leállás) cold-tier-be mozgatva. 2 pontos duplikátum (`Szeretem a kavét`, `Mai megbeszeles eredmenye`, egyenként 4x) — ezek már eleve cold-tier teszt-adatok, nem mozgattam tovább.
+1316 / 1316 vektorizált (1 hiányzó pótolva). 12 antikvált hot-tier memória (mind 2026-08-21 vagy régebbi, már lezárt kártyákra — #221, #348, #375 — vagy elavult skip-skill jegyzetekre vonatkozott) cold-tier-be mozgatva. Duplikátum-ellenőrzés: csak 2 db, egyértelműen teszt/fixture-tartalom ("Mai megbeszélés eredménye", "Szeretem a kávét", 4-4 példány) — valós tartalmi duplikátum nem volt.
 
 ## 🎯 Top-3 holnapi javaslat
-1. Marveen_Env: #384 (stuck multi-row input) — reggel MANUÁLISAN vond vissza a `web/index.html`-ben az uncommitted szülinapi easter egget (`git checkout -- web/index.html`), utána futtasd újra a 34 tesztet a c9c2f50 commit-on, és ha zöld, kérj restart-confirmet Jocootól — ez az egyetlen blokkoló, aktív tétel, minden más rajta várakozik (git-műveletek az easter egg miatt jelenleg veszélyesek).
-2. Financials: #276 (Published P&L nem FY26-ra szűrt, Looker forrás) — high priority, `waiting` állapotban ragadt, 3+ napja nincs rajta mozgás, pénzügyi pontossági kockázat.
-3. HomeLab: #347 (Surface home-server + TV, WiFi átállás + DisplayPort→HDMI lánc) — `in_progress` 2+ napja mozdulatlan Kronknál, érdemes megkérdezni státuszt mielőtt tovább stagnál.
+(Minden jelölt kommentjét átfutottam parkolás-jelzésért — a Home-server 4/4 kártya és a Financials Looker-ágon lévő tételek ki is estek emiatt, ld. lent.)
+1. HomeLab: #401 (link-átíró custom.js javítása, Kronknál) — Windows böngészőben megint Tailscale IP-vel próbál linket nyitni localhost helyett, aktív blokkoló a napi használatban, már kiküldve, csak visszajelzésre vár.
+2. Scouts: storage key felvétele (magas prioritás, Jocoo-nál) — a többi Scouts QM kártya (leltár a denben, insurance-tisztázás) ettől függ, jelenleg ez a láncszem hiányzik.
+3. Financials: UI (8791) dockerizálása (Kronknál, low) — az egyetlen nyitott Financials-tétel ami NEM a parkolt Looker-ágon lóg, nincs kommentben jelzett blokkoló, egyszerű infra-lépés.
 
 ## 🌐 External opportunity
-[oguzhnatly/fleet](https://github.com/oguzhnatly/fleet) — multi-agent fleet management CLI kifejezetten Claude Code-hoz: monitorozás, megbízhatóság-értékelés, intelligens routing runtime-ok között. Relevancia: ez pontosan a saját flotta-menedzsment problémánk (Cuzcoo mint karmester több sub-agent felett), érdemes megnézni fed-e le olyat amit most kézzel csinálunk (pl. session health, restart-triázs). Csillagszám és aktivitás WebSearch-ből NEM ellenőrizhető megbízhatóan — mielőtt bármit is bevezetnétek belőle, nézzétek meg a repót közvetlenül.
+Skip — heti limit nem telt le (utolsó futás 3 napja, a küszöb 7 nap).
 
 ## 🛠 Skill-flotta health
-Nincs megbízható használat-log a nem-pinned skillekhez (101 db) — a fájl-módosítási idő NEM azonos a használattal, ezért heurisztikus "antikvált" riasztást szándékosan nem adok ki, mert hamis pozitív lenne. Ha ez fontos, egy tényleges use-log (pl. Skill-hívás naplózása a dashboardon) kellene előbb.
+37 nem-pinned skill régebbi mint 30 nap, de a legrégebbiek (`skill-management`, `retrospective`, `skill-factory`, ~93-94 nap) alapinfrastruktúra-skillek, ritka triggerelés várható, nem törlésre valók. Konkrét jelölt: `docker-group-stale-session` (58 napja nem érintett, WSL2-specifikus egyszeri hiba, azóta nem ismétlődött) — frissítés vagy archiválás megfontolható, ha a fleet stabilan túl van a docker-group problémán.
 
-*Marveen, 02:41 — most már alszom én is.*
+*Marveen, 02:19 — most már alszom én is.*
