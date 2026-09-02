@@ -185,6 +185,31 @@ function resolveLang(): 'hu' | 'en' {
 
 let state: NudgeState = { ...INITIAL_NUDGE_STATE }
 
+// Epoch-ms of the last nudge whose keystrokes actually reached the MAIN pane
+// (0 = never). Moved here from message-router.ts on 2026-09-02: upstream
+// 7a47b24 deleted the router's own wakeup as a second, blind nudge engine, and
+// this watcher is the surviving one -- so this is now the only place that knows
+// when the main session was handed something.
+//
+// Read by the stuck-tool-call-watcher (#376): a frozen "<verb> for Ns" TUI
+// counter that predates a recent nudge is a COMPLETED turn's residual footer,
+// not a wedge -- the session was just handed a message and is about to render
+// the new turn (CPU still low in the gap between injection and turn-start), so
+// the idle/parked-input guards no longer apply but the evidence is stale. The
+// watcher defers on this so it does not respawn the session mid-pickup and
+// drop the just-injected message.
+//
+// Set only on a confirmed 'sent': an aborted-busy / skipped-locked / thrown
+// send types NOTHING, so treating it as a wakeup would make the watcher defer
+// on a session that was never nudged -- the under-claim direction is the safe
+// one here (an extra deferral cycle costs a poll; a missed wedge costs the
+// channel).
+let lastMainAgentWakeupMs = 0
+
+export function lastMainAgentWakeupAt(): number {
+  return lastMainAgentWakeupMs
+}
+
 /** Test seam. */
 export function _resetNudgeStateForTest(): void {
   state = { ...INITIAL_NUDGE_STATE }
@@ -271,6 +296,7 @@ async function tick(): Promise<void> {
       logger.info({ inboxNudgeSkipped: result, pending: pending.length }, 'inbox nudge: nothing typed before send; skipped')
       return
     }
+    lastMainAgentWakeupMs = Date.now()
     logger.info(
       { inboxNudge: true, pending: pending.length, oldestId: oldest.id, nudgesInLastHour: state.recentNudges.length },
       'inbox nudge: prompted the main agent to drain its inbox',

@@ -28,7 +28,6 @@ import {
   clearFeedbackModalAndRecheck,
 } from './agent-process.js'
 import { detectPaneState, type PaneState } from '../pane-state.js'
-import { MAIN_CHANNELS_SESSION } from './main-agent.js'
 import { sendMarveenAlert } from './telegram.js'
 import { setLastInboundModality } from './voice-modality.js'
 import { classifyAgentMessage, wrapAgentMessageForDelivery, classificationAudit } from './agent-message-wrap.js'
@@ -155,24 +154,11 @@ function notifyOrchestratorOfFailedHandoff(msg: AgentMessage, reason: string): v
     logger.warn({ err, id: msg.id }, 'Failed to enqueue handoff-failure notification')
   }
 }
-// Wakeup cooldown for the main agent: the router fires at most one
-// sendPromptToSession wakeup per COOLDOWN_MS window to avoid spamming the
-// channels session. 45s gives enough headroom that a normal turn (typically
-// 5-30s) ends and drain-inbox fires before we would retry.
-let lastMainAgentWakeupMs = 0
-const MAIN_AGENT_WAKEUP_COOLDOWN_MS = 45 * 1000
-
-// Exposed for the stuck-tool-call-watcher (#376): epoch-ms of the last inbox
-// wakeup injected into the MAIN channels session (0 = never). A frozen "<verb>
-// for Ns" TUI counter that predates a recent wakeup is a COMPLETED turn's
-// residual footer, not a wedge -- the session was just handed a message and is
-// about to render the new turn (CPU still low in the gap between injection and
-// turn-start), so the idle/parked-input guards no longer apply but the evidence
-// is stale. The watcher defers on this so it does not respawn the session
-// mid-pickup and drop the just-injected message.
-export function lastMainAgentWakeupAt(): number {
-  return lastMainAgentWakeupMs
-}
+// NOTE (#376 follow-up, 2026-09-02): the main-agent wakeup that used to live
+// here was removed upstream in 7a47b24 -- it was a second, blind nudge engine
+// racing the inbox-nudge-watcher. lastMainAgentWakeupAt() moved with it, to
+// inbox-nudge-watcher.ts, so the stuck-tool-call-watcher still defers while
+// the main session is picking up an injected message.
 
 // Why an inter-agent message was marked failed. The router only escalates
 // genuine delivery failures (the target was meant to receive it, but never
@@ -634,7 +620,6 @@ export async function runMessageRouterTick(): Promise<void> {
     // on their own budget so neither queue starves the other.
     await deliverFederatedBatch(federatedPending, now)
 
-    let mainAgentWakeupFiredThisTick = false
     for (const msg of pending) {
       // Skip messages already batched by the reconnect pre-pass: they are
       // 'done' in the DB now but still appear in our snapshot slice.
@@ -657,24 +642,20 @@ export async function runMessageRouterTick(): Promise<void> {
       // day. Leave the message pending; the next main-agent turn claims it
       // atomically. Sub-agents keep the tmux-inject path (they have idle gaps).
       //
-      // WAKEUP: without an active nudge the main agent only drains on the next
-      // user message or heartbeat -- up to 22+ min latency observed in prod.
-      // Fire one lightweight wakeup per cooldown window so an idle channels
-      // session starts a turn and drain-inbox claims the message immediately.
-      // Busy session: Claude Code queues the wakeup for the next turn boundary.
-      if (isMainAgent) {
-        if (!mainAgentWakeupFiredThisTick && now - lastMainAgentWakeupMs >= MAIN_AGENT_WAKEUP_COOLDOWN_MS) {
-          mainAgentWakeupFiredThisTick = true
-          lastMainAgentWakeupMs = now
-          try {
-            await sendPromptToSession(MAIN_CHANNELS_SESSION, '[inbox-wakeup: pending inter-agent messages]', null, { waitForIdle: false })
-            logger.info({ msgId: msg.id }, 'message-router: main-agent wakeup fired')
-          } catch (err) {
-            logger.warn({ err }, 'message-router: main-agent wakeup injection failed')
-          }
-        }
-        continue
-      }
+      // WAKEUP: owned by the inbox-nudge-watcher, NOT by this router. The
+      // wakeup that used to live here (#538) predates that watcher (#557)
+      // and was never removed, so two engines nudged the
+      // same pane -- and this one fired BLIND: waitForIdle:false, no readiness
+      // check, no staleness tracking, once per 45s cooldown for as long as the
+      // row stayed pending. Against a mid-turn pane that lands as a queued
+      // mid-turn message, not a prompt submit: no UserPromptSubmit, so no
+      // drain-inbox call, so no claim -- the row stays pending and the cooldown
+      // re-arms -- observed as four such injections in three minutes for a
+      // single message, five main-agent turns burned, nothing delivered.
+      // The watcher does the same job correctly (double-capture-confirmed idle,
+      // abort-on-busy send, stale-spell escalation, owner alert, hourly budget),
+      // so the router simply leaves the row for the PULL path to claim.
+      if (isMainAgent) continue
       // Use cached session data from the pre-pass (one sessionExistsOnHost call
       // per unique receiver per tick). Fall back to a direct call for agents not
       // in the pending set (shouldn't happen, but safe).

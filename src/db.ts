@@ -678,6 +678,11 @@ export function initDatabase(dbPathOverride?: string): void {
     )
   `)
   db.exec(`CREATE INDEX IF NOT EXISTS idx_pending_retries_first_attempt ON pending_task_retries(first_attempt)`)
+  // Stage-2 escalation stamp (direct-to-owner channel alert), added
+  // alongside the two-stage escalation redesign. Mirrors alert_sent_at
+  // exactly (claim-before-send guard, cleared on delivery failure), just for
+  // the later, bigger threshold.
+  try { db.exec('ALTER TABLE pending_task_retries ADD COLUMN owner_alert_sent_at INTEGER') } catch { /* already exists */ }
 
   db.exec(`
     CREATE TABLE IF NOT EXISTS background_tasks (
@@ -1851,8 +1856,17 @@ export function moveKanbanCard(id: string, status: KanbanCard['status'], sortOrd
   // Read the previous status first so we only record an audit event on a real
   // status transition (not a pure sort_order reorder within the same column).
   const prev = (db.prepare('SELECT status FROM kanban_cards WHERE id=?').get(id) as { status: string } | undefined)?.status
+  // dispatched_at guards ONE in_progress spell (one activation -> one wake-up
+  // message), it is not a permanent tombstone. Nothing used to clear it, so a
+  // card pulled to in_progress and put BACK burned its dispatch forever: the
+  // board showed it alive while the next pull woke nobody. Clearing it on
+  // every move that does not land in in_progress re-arms the next activation --
+  // and heals a row already stuck this way, since the clear does not depend on
+  // the previous status.
   const changed = db.prepare(
-    'UPDATE kanban_cards SET status=?, sort_order=?, updated_at=? WHERE id=?'
+    status === 'in_progress'
+      ? 'UPDATE kanban_cards SET status=?, sort_order=?, updated_at=? WHERE id=?'
+      : 'UPDATE kanban_cards SET status=?, sort_order=?, updated_at=?, dispatched_at=NULL WHERE id=?'
   ).run(status, sortOrder, now, id).changes > 0
   if (changed && prev !== undefined && prev !== status) {
     db.prepare(
@@ -2692,6 +2706,7 @@ export interface PendingTaskRetryRow {
   attempt_count: number
   last_reason: string | null
   alert_sent_at: number | null
+  owner_alert_sent_at: number | null
 }
 
 /**
@@ -2784,6 +2799,19 @@ export function markPendingTaskRetryAlert(taskName: string, agentName: string, t
   return db
     .prepare('UPDATE pending_task_retries SET alert_sent_at = ? WHERE task_name = ? AND agent_name = ? AND alert_sent_at IS NULL')
     .run(ts, taskName, agentName).changes > 0
+}
+
+/** Stage-2 (direct-to-owner) mirror of markPendingTaskRetryAlert / clearPendingTaskRetryAlert. */
+export function markPendingTaskRetryOwnerAlert(taskName: string, agentName: string, ts: number): boolean {
+  return db
+    .prepare('UPDATE pending_task_retries SET owner_alert_sent_at = ? WHERE task_name = ? AND agent_name = ? AND owner_alert_sent_at IS NULL')
+    .run(ts, taskName, agentName).changes > 0
+}
+
+export function clearPendingTaskRetryOwnerAlert(taskName: string, agentName: string): boolean {
+  return db
+    .prepare('UPDATE pending_task_retries SET owner_alert_sent_at = NULL WHERE task_name = ? AND agent_name = ?')
+    .run(taskName, agentName).changes > 0
 }
 
 // --- Vector Search (Ollama + nomic-embed-text) ---

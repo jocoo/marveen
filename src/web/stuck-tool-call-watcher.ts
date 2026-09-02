@@ -45,7 +45,7 @@ import { capturePane } from './agent-process.js'
 import { readTranscriptMtimeFromProjectDir } from './active-model.js'
 import { MAIN_CHANNELS_SESSION } from './main-agent.js'
 import { resumeMarveenSession, sendAlert, lastMainRespawnAt, MARVEEN_POST_RESPAWN_GRACE_MS } from './channel-monitor.js'
-import { lastMainAgentWakeupAt } from './message-router.js'
+import { lastMainAgentWakeupAt } from './inbox-nudge-watcher.js'
 import {
   stuckToolCallSignature,
   decideStuckToolCallRecovery,
