@@ -1,23 +1,27 @@
-# 💭 Dream Engine — 2026-09-01 02:07
+# 💭 Dream Engine — 2026-09-03 02:07
 
 ## 💡 Skill-javaslatok
-Ma élőben patchelve: `tmux-mass-restart-oom-triage` (a 08-27-i "lezárt" OOM-fix nem végleges, a 20:03-as cuzcoo-channels crash megismételte a mintázatot; a cgroup `oom_kill` számláló megbízhatatlan utólagos bizonyítékként), `kronk-deliverable-deploy-cycle` (peer SSH-kulcs-hozzáférés ≠ Jocoo saját konzol-hozzáférése, ne nyilváníts okafogyottá egy Jocoo-kérdést csak mert egy kapcsolódó út zöldre vált), és a `dream-engine` skill maga (napi commit worktree-alapúra állítva, ld. lent).
+Ma élő skill-patch nem történt (a `~/.claude/skills` és a projekt `.claude/skills` egyik SKILL.md-je sem módosult az elmúlt 24 órában). Egy éjszakai javaslat van:
 
-Ezen felül egy még le nem fedett, flotta-szintű minta:
-- **Kronk ma egy kártyán (#402) belül három, egymástól független systemd/API-csapdát dokumentált** (StartLimitBurst/StartLimitIntervalSec csak `[Unit]`-ban érvényes, nem `[Service]`-ben; `Exec*` sorokban nincs shell parancs-behelyettesítés; a dashboard `/api/memories` biztonsági szűrője elutasítja a shell-mintát tartalmazó szöveget). Ez három külön, jövőben újra előkerülő buktató egyetlen memóriában eltemetve — érdemes lenne egy `systemd-user-unit-authoring` (agent: Kronk) skillbe kiemelni, mielőtt legközelebb valaki újra nekifut és újra megtalálja ugyanezt.
+- **`.claspignore` push-ellenőrzés a financials-processor deploy-hoz** (agent: Kronk) — Kronk ma (#405-409 sorozat mellékterméke) `clasp push -f`-fel véletlenül felvitte a `docs/ui-redesign/` alatti HTML mockupokat az élő Apps Script projektbe, mert a `.claspignore` nem tartalmazta a `docs/**` mintát. A javítás megtörtént (commit bdd03f4), de a mögöttes gotcha — "a `*.js` diff = zero drift" ellenőrzés nem fogja meg a felesleges nem-JS fájlokat, a pulled-fájlszámot kell nézni — nincs egyetlen meglévő clasp-skillben sem rögzítve (a `financials-live-sheet-clasp-diagnostic` csak olvasásra épül, nem push-ra). Egy rövid Buktató-bejegyzés egy jövőbeli push-workflow skillbe (vagy egy új, dedikált deploy-checklist skill) megelőzné a következő ilyen leakage-t.
+
+Ezen felül nincs újabb, éjszakai javaslat — a worktree/prod-tree-guard mintát (szintén ma előkerült) már lefedi a `marveen-upstream-sync` skill Buktatók szekciója.
 
 ## 🧹 Memória-egészség
-1345 / 1345 vektorizált (1 hiányzó — a mai napi napló bejegyzés — pótolva). 37 antikvált hot-tier memória (2026-08-17 és 08-24 közötti, már lezárt kártyákra — #355, #356, #357, #362, #372-375, #382 — és elavult skip-skill jegyzetekre vonatkozó) cold-tier-be mozgatva. Duplikátum-ellenőrzés: 8 db, mind a korábbi futásból már ismert teszt/fixture-tartalom ("Mai megbeszélés eredménye", "Szeretem a kávét", 4-4 példány, már cold-ban), új valós duplikátum nem volt.
+1358 / 1358 memória vektorizálva (100%). 11 antikvált hot-tier memória (>7 napja nem hivatkozott, mind 2026-08-24/26-i skip-skill és lezárt task bejegyzés) cold-tier-be mozgatva. 2 pontos duplikátum-pár található ("Mai megbeszeles eredmenye" és "Szeretem a kavét", egyenként 4x, id 36-43) — ezek már réges-régen (2026-06-08) cold-tier-ben vannak, teszt-eredetűek, nem mozgattam/nem töröltem tovább.
 
 ## 🎯 Top-3 holnapi javaslat
-1. HomeLab: Home-server 4/4 (Kodi + képernyő-kikapcsolás + sztereó hang ellenőrzés, Kronknál, waiting) — a #404 (docker01 git-migráció) ma lezárult, a projekt momentuma magas, ez a természetes következő lépés ugyanabban a körben.
-2. Financials: Published P&L nem FY26-ra szűrt, Looker forrása (magas prioritás, cuzcoo-nál, waiting) — az egyetlen magas prioritású Financials-tétel, egy hete mozdulatlan, valós számviteli pontossági kockázatot hordoz.
-3. Scouts: storage key felvétele + den-leltár (mindkettő magas prioritás, Jocoo-nál, planned) — teljesen mozdulatlan a nyitás óta, a többi Scouts QM kártya ettől a két lépéstől függ, de ez agent-munkával nem előrevihető, csak Jocoo saját fizikai lépésével.
+1. Financials: #276 (Published P&L nem FY26-ra szűrt, Looker forrás) — high priority, Jocoo-ra vár; ma lezárult az egész #405-409 sorozat, jó pillanat a következő nyitott Financials döntésre rátérni.
+2. Marveen_Env: #391 (Cuzcoo inbox-drain hook csendes elhalása magas üzenetforgalom alatt) — üzenet-integritási kockázat, még nincs dispatch, és a mai nap is mutatta hogy a fleet üzenetforgalma tud pörögni (több kártya, sok inter-agent üzenet).
+3. HomeLab: #351 (Home-server 4/4: Kodi + képernyő-kikapcsolás + sztereo hang verifikáció) — #350 lezárva és e2e-verifikálva 2026-08-25 óta, ez a logikus következő lépés, momentum van a projekten.
 
 ## 🌐 External opportunity
-Skip — heti limit nem telt le (utolsó futás 4 napja, a küszöb 7 nap).
+Skip — heti limit még nem telt le (utolsó kör 5 napja, 7 nap alatt).
 
 ## 🛠 Skill-flotta health
-Nincs új antikvált jelölt a tegnapihoz képest — a korábban megjegyzett `docker-group-stale-session` (WSL2-specifikus, azóta nem ismétlődött probléma) továbbra is frissítés/archiválás-jelölt, de nem sürgős.
+A skill-usage log csak ~34 napot fed le, ezen az ablakon belül két nem-pinned skill közelíti a 30 napos határt (`fleet-risk-parallel-escalation` ~32 nap, `stale-ticket-unblock-eval` ~32 nap) — túl friss/bizonytalan adat egy törlési javaslathoz. A többi, log szerint "sosem hívott" skill (pl. `whisperx-poc-run`, `kanban-to-trello-migration`, `wd-mycloud-stuck-initializing`) ellenőrizve: mindegyik élő, nyitott kártyához vagy ritka, szituációs triggerhez kötött (pl. #72 WhisperX PoC még waiting), nem antikvált — csak ritkán tüzel. Nincs konkrét törlési/frissítési javaslat ma.
 
-*Marveen, 02:09 — most már alszom én is.*
+## ⚠️ Hibák
+A `dream-log` worktree-ág (`/home/jocoo/marveen-wt-dream`) el van maradva a fő tree mögött: a tegnapi (2026-09-01) DREAM.md-commitja óta a `main` befogadta a `#407`/`#408` upstream-sync merge-eket (`1d4521d`, `9ff4650`), a `dream-log` ág viszont ezekre nincs ráépítve. Ezért a `git merge dream-log --ff-only` a fő tree-n elutasította a merge-et ("Diverging branches can't be fast-forwarded"). A szabály szerint NEM force-oltam. A tartalom emiatt csak a `dream-log` ágon van commitolva (`0459b2e`) és a fő tree munkakönyvtárában (nem commitolt módosításként — a reggeli napindító ezt így is látja fájlszinten). A `dream-log` ágat rebase-elni/újraalapozni kell a jelenlegi `main`-re (`9ff4650`), utána a `--ff-only` merge újra menni fog. Jocoo/Kronk nézze meg reggel.
+
+*Marveen, 02:10 — most már alszom én is.*
