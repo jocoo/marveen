@@ -78,9 +78,16 @@ if [ -n "${VITEST:-}" ] || [ "${NODE_ENV:-}" = "test" ]; then
   MESSAGE="[TESZT] ${MESSAGE}"
 fi
 
-curl -s -X POST "https://api.telegram.org/bot${TOKEN}/sendMessage" \
-  -d "chat_id=${CHAT_ID}" \
-  -d "text=${MESSAGE}" \
-  -d "parse_mode=HTML" > /dev/null
+# Delivery must be HONEST (NOTIFYVAK826): this script is the fleet's FALLBACK
+# channel, used exactly when the primary Telegram plugin is already down. The
+# success contract (curl exit 0 AND Bot API "ok":true, loud stderr otherwise,
+# token redacted) lives in the shared library so every sender speaks the same
+# truth (NOTIFYVAKSWEEP826) -- this script consumes it, it no longer inlines it.
+. "$SCRIPT_DIR/lib/send-telegram.sh"
 
-echo "Ertesites elkuldve."
+if send_telegram_message "$TOKEN" "$CHAT_ID" "$MESSAGE" --data-urlencode "parse_mode=HTML"; then
+  echo "Ertesites elkuldve."
+else
+  echo "Hiba: ertesites kuldese sikertelen (reszletek fent)." >&2
+  exit 1
+fi

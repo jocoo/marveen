@@ -57,6 +57,7 @@ function facts(over: Partial<StuckInputActionFacts>): StuckInputActionFacts {
     machineOrigin: false,
     pastePlaceholder: false,
     machineTail: false,
+    recordedMatch: false,
     ...over,
   }
 }

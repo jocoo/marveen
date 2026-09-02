@@ -78,6 +78,9 @@ describe('welcome-screen wedge: detection -> recovery decision (real fixture)', 
       machineOrigin: false, // computed: no prefix, no truncated marker survives
       pastePlaceholder: false,
       machineTail: false, // computed: the closing tag did not survive either
+      // No registry record for this fixture: the scrape stays unproven, so the
+      // STUCKINPUT827 rescue must NOT fire and the wedge still holds.
+      recordedMatch: false,
     }
     expect(decideStuckInputAction(wedgeFacts)).toBe('hold')
     // Same fixture, but with the wrapper tail surviving the truncation: now it
