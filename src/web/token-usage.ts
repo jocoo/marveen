@@ -1,4 +1,4 @@
-import { statSync, readdirSync, existsSync } from 'node:fs'
+import { statSync, readdirSync, existsSync, realpathSync } from 'node:fs'
 import { join, basename } from 'node:path'
 import { homedir } from 'node:os'
 import { createReadStream } from 'node:fs'
@@ -68,15 +68,38 @@ export function discoverAgentSources(projectRootOverride?: string): AgentTranscr
   // deliberate, so the two readers cannot drift apart again.
   //
   // Both roots are kept for a migrated agent, not swapped: the pre-migration
-  // history is real and lives only in the shared root. Duplicate rows are
-  // impossible anyway -- the UNIQUE INDEX on (agent, session_id, timestamp,
-  // input, output) plus INSERT OR IGNORE absorbs any overlap.
+  // history is real and lives only in the shared root. Re-reading the SAME
+  // file under one agent is harmless -- the UNIQUE INDEX on (agent,
+  // session_id, timestamp, input, output) plus INSERT OR IGNORE absorbs it.
+  // Reading it under a SECOND agent is not, because `agent` is in that key.
+  //
+  // The ownership assumption below ("this dir holds only this agent's work")
+  // holds ONLY while the isolated root is a real, private directory. It is not
+  // always one: the fleet's provisioning links agents/<name>/.claude-config/
+  // projects -> ~/.claude/projects (measured 2026-09-03 on chaca, chicha,
+  // kronk, mata, tipo, yzma -- six symlinks, all to the shared root). Read
+  // through such a link, this loop enumerates EVERY project dir in the shared
+  // root and stamps all of them with one agent's name, so a single session was
+  // written to token_usage once per symlinked agent: 93 sessions carried 7
+  // agents each, 117 carried 6, and /api/token-usage/summary handed the
+  // morning briefing near-identical totals for the whole fleet (only the main
+  // agent, which has no isolated dir, differed). The UNIQUE INDEX cannot
+  // absorb this -- `agent` is part of the key, so each copy is a distinct row.
+  //
+  // So: an isolated root is trusted only where it is genuinely separate from
+  // the shared root, and a real project dir is claimed by at most one source.
+  // Loop 1 already attributes the shared root correctly, by encoded dir name.
+  const claimed = new Set<string>()
+  for (const s of sources) claimed.add(realPathOr(s.projectDir))
+  const sharedRoot = realPathOr(PROJECTS_DIR)
   for (const name of listAgentNames()) {
     let configDir: string | null = null
     try { configDir = resolveAgentConfigDirForRead(name, projectRootOverride) } catch { continue }
     if (!configDir) continue
     const isolatedProjects = join(configDir, 'projects')
     if (!existsSync(isolatedProjects)) continue
+    // A link (or bind mount) back onto the shared root is not an isolated dir.
+    if (realPathOr(isolatedProjects) === sharedRoot) continue
     let entries: string[]
     try { entries = readdirSync(isolatedProjects) } catch { continue }
     for (const entry of entries) {
@@ -86,12 +109,22 @@ export function discoverAgentSources(projectRootOverride?: string): AgentTranscr
       if (!stat.isDirectory()) continue
       // Attribution comes from WHOSE config dir this is, not from the encoded
       // project name: an agent's isolated dir holds only that agent's work.
-      if (sources.some((s) => s.agent === name && s.projectDir === full)) continue
+      // Per-directory guard for the same reason as the root guard above: a
+      // single real directory reached through two agents' config dirs would
+      // otherwise be counted for both.
+      const real = realPathOr(full)
+      if (claimed.has(real)) continue
+      claimed.add(real)
       sources.push({ agent: name, projectDir: full })
     }
   }
 
   return sources
+}
+
+/** realpath, falling back to the given path when it cannot be resolved. */
+function realPathOr(p: string): string {
+  try { return realpathSync(p) } catch { return p }
 }
 
 function findJsonlFiles(dir: string): string[] {
