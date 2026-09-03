@@ -1,27 +1,25 @@
-# 💭 Dream Engine — 2026-09-03 02:07
+# 💭 Dream Engine — 2026-09-04 02:07
+
+_(Tegnap esti hiba javítva: a `dream-log` ág el volt maradva a fő ág mögött a #407/#408 upstream-sync miatt, ezért a 09-03-i bejegyzés csak a worktree-ben volt commitolva. Ma este `git rebase main dream-log` + `--ff-only` merge rendbe hozta, a 09-03-i commit is bekerült a fő tree történetébe.)_
 
 ## 💡 Skill-javaslatok
-Ma élő skill-patch nem történt (a `~/.claude/skills` és a projekt `.claude/skills` egyik SKILL.md-je sem módosult az elmúlt 24 órában). Egy éjszakai javaslat van:
+Ma két skill módosult élőben: `heartbeat-repeat-cadence-check` (új, Cuzcoo — a ledger-live-drain gyors, ismétlődő, üres kimenetű firingje `*/2 * * * *` ütemezés miatt várt viselkedés, nem hiba), és `marveen-dashboard-deploy` (patch, Kronk — a #410 körüli 73 perces flotta-kiesés tanulsága: a dashboard stop és start soha nem mehet két külön tool-hívásban, mindig egy parancsláncban).
 
-- **`.claspignore` push-ellenőrzés a financials-processor deploy-hoz** (agent: Kronk) — Kronk ma (#405-409 sorozat mellékterméke) `clasp push -f`-fel véletlenül felvitte a `docs/ui-redesign/` alatti HTML mockupokat az élő Apps Script projektbe, mert a `.claspignore` nem tartalmazta a `docs/**` mintát. A javítás megtörtént (commit bdd03f4), de a mögöttes gotcha — "a `*.js` diff = zero drift" ellenőrzés nem fogja meg a felesleges nem-JS fájlokat, a pulled-fájlszámot kell nézni — nincs egyetlen meglévő clasp-skillben sem rögzítve (a `financials-live-sheet-clasp-diagnostic` csak olvasásra épül, nem push-ra). Egy rövid Buktató-bejegyzés egy jövőbeli push-workflow skillbe (vagy egy új, dedikált deploy-checklist skill) megelőzné a következő ilyen leakage-t.
-
-Ezen felül nincs újabb, éjszakai javaslat — a worktree/prod-tree-guard mintát (szintén ma előkerült) már lefedi a `marveen-upstream-sync` skill Buktatók szekciója.
+Ezen felül egy új javaslat:
+- **Élő-checkout commit-guard (EVIDGUARD818) általános eljárása hiányzik egy fleet-szintű skillből** (flotta-szintű) — ma harmadszor futottunk bele abba, hogy a `/home/jocoo/marveen` fő checkoutban nem lehet direkt commitolni (Kronk a #410 token-usage fixnél), a worktree-be terelt commit + `git merge --ff-only` mintát eddig csak két szűk-scope-ú skill (`dream-engine`, `marveen-upstream-sync`) írja le külön-külön, saját kontextusban. Egy dedikált, mindenki (elsősorban Kronk) által hivatkozható skill kiváltaná a duplikált tudást és a mai ismétlődő divergencia-hibát is (ld. fenti jegyzet) előzhetné meg.
 
 ## 🧹 Memória-egészség
-1358 / 1358 memória vektorizálva (100%). 11 antikvált hot-tier memória (>7 napja nem hivatkozott, mind 2026-08-24/26-i skip-skill és lezárt task bejegyzés) cold-tier-be mozgatva. 2 pontos duplikátum-pár található ("Mai megbeszeles eredmenye" és "Szeretem a kavét", egyenként 4x, id 36-43) — ezek már réges-régen (2026-06-08) cold-tier-ben vannak, teszt-eredetűek, nem mozgattam/nem töröltem tovább.
+1375 / 1375 memória vektorizálva (100%, 1 hiányzó pótolva backfill-lel). 10 antikvált hot-tier memória cold-tier-be mozgatva (8 db a lezárt 2026-08-27-i szülinapi film projektről, 2 db a közben `done`-ra került #384 stuck-input kártyáról — mindkettő ellenőrizve kanban-státusz alapján, nem csak kor alapján). 2 pontos duplikátum-pár ("Mai megbeszeles eredmenye" / "Szeretem a kavét", 4-4 példány, id 36-43) — már réges-régen cold-tier-ben, teszt-eredetű, nem mozgattam tovább.
 
 ## 🎯 Top-3 holnapi javaslat
-1. Financials: #276 (Published P&L nem FY26-ra szűrt, Looker forrás) — high priority, Jocoo-ra vár; ma lezárult az egész #405-409 sorozat, jó pillanat a következő nyitott Financials döntésre rátérni.
-2. Marveen_Env: #391 (Cuzcoo inbox-drain hook csendes elhalása magas üzenetforgalom alatt) — üzenet-integritási kockázat, még nincs dispatch, és a mai nap is mutatta hogy a fleet üzenetforgalma tud pörögni (több kártya, sok inter-agent üzenet).
-3. HomeLab: #351 (Home-server 4/4: Kodi + képernyő-kikapcsolás + sztereo hang verifikáció) — #350 lezárva és e2e-verifikálva 2026-08-25 óta, ez a logikus következő lépés, momentum van a projekten.
+1. Infra: #411 (Dashboard/channels uptime watchdog) — Kronk terve kész (systemd timer + Telegram-riasztás cooldown-nal), Jocoo priorizálására vár; a mai #410-es 73 perces kiesés direkt tanulsága, minél tovább vár, annál tovább nincs védelem hasonló ellen.
+2. Scouts: #142 (storage key pickup) — magas prioritás, planned státuszban 2 hónapja mozdulatlan (2026-07-08 óta), fizikai lépés, ami feltehetően blokkolja a többi QM-kártyát (pl. #143 den-leltár).
+3. HomeLab: #351 (Kodi 4K/HEVC decode) — minden vizsgálat és tesztelés kész (Kronk, 2026-08-30), egyetlen nyitott döntés maradt: a Radarr minőség-profil 1080p-re sapkázása (egy kattintás, visszavonható), Jocoo jóváhagyására vár.
 
 ## 🌐 External opportunity
-Skip — heti limit még nem telt le (utolsó kör 5 napja, 7 nap alatt).
+Skip — heti limit még nem telt le (utolsó kör 6 napja, 7 nap alatt).
 
 ## 🛠 Skill-flotta health
-A skill-usage log csak ~34 napot fed le, ezen az ablakon belül két nem-pinned skill közelíti a 30 napos határt (`fleet-risk-parallel-escalation` ~32 nap, `stale-ticket-unblock-eval` ~32 nap) — túl friss/bizonytalan adat egy törlési javaslathoz. A többi, log szerint "sosem hívott" skill (pl. `whisperx-poc-run`, `kanban-to-trello-migration`, `wd-mycloud-stuck-initializing`) ellenőrizve: mindegyik élő, nyitott kártyához vagy ritka, szituációs triggerhez kötött (pl. #72 WhisperX PoC még waiting), nem antikvált — csak ritkán tüzel. Nincs konkrét törlési/frissítési javaslat ma.
+A `skill_usage` log mostanra 36 napot fed le (2026-07-30 óta), tehát a 30 napos mtime-küszöb már megbízható adatra épül. 28 nem-pinned skill mutat 0 találatot a log szerint, de a legtöbb ellenőrzött eset (pl. `whisperx-poc-run`, `job-application-tailoring`, `kanban-to-trello-migration`, `portainer-password-reset`, `pdf-page-rotate`) ritka, szituációs triggerhez vagy nyitott kártyához kötött (pl. #213 ADG jelentkezés, Trello-integráció aktívan használatban van más skillekben) — nem antikvált, csak ritkán tüzel. Nincs konkrét törlési/frissítési javaslat ma; érdemes lenne egy külön, alaposabb áttekintést szánni erre a 28 elemre, mert a lista önmagában túl nagy egy éjszakai gyors-szűréshez.
 
-## ⚠️ Hibák
-A `dream-log` worktree-ág (`/home/jocoo/marveen-wt-dream`) el van maradva a fő tree mögött: a tegnapi (2026-09-01) DREAM.md-commitja óta a `main` befogadta a `#407`/`#408` upstream-sync merge-eket (`1d4521d`, `9ff4650`), a `dream-log` ág viszont ezekre nincs ráépítve. Ezért a `git merge dream-log --ff-only` a fő tree-n elutasította a merge-et ("Diverging branches can't be fast-forwarded"). A szabály szerint NEM force-oltam. A tartalom emiatt csak a `dream-log` ágon van commitolva (`0459b2e`) és a fő tree munkakönyvtárában (nem commitolt módosításként — a reggeli napindító ezt így is látja fájlszinten). A `dream-log` ágat rebase-elni/újraalapozni kell a jelenlegi `main`-re (`9ff4650`), utána a `--ff-only` merge újra menni fog. Jocoo/Kronk nézze meg reggel.
-
-*Marveen, 02:10 — most már alszom én is.*
+*Marveen, 02:11 — most már alszom én is.*
