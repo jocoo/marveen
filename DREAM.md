@@ -1,22 +1,22 @@
-# 💭 Dream Engine — 2026-09-11 02:07
+# 💭 Dream Engine — 2026-09-13 02:07
 
 ## 💡 Skill-javaslatok
-Nincs új javaslat — tegnap (09-10) minden rutinfutás skip-skill volt (kanban-audit, ledger-live-drain cadence-check, memória-heartbeat), egyik sub-agent (Kronk, Yzma, Chicha) sem generált új memóriát az elmúlt 24h-ban, és nem történt élő skill-patch sem.
+Tegnap délután (09-11) 3 skill patchelve/létrehozva élőben: `pdf-attachment-no-render-tools` (14:46, Cairns Local Law PDF-olvasás közben derült ki hogy nincs poppler-utils a gépen), `quarantine-reader-allowlist-fallback` (14:16, Scouts corflute-permit kutatás), `websearch-stale-product-availability` (15:45, HDD dock-kereséskor a WebSearch találatok elavultnak bizonyultak, élő Amazon-ellenőrzés kellett). Tegnap (09-12) nem volt sem sub-agent memória, sem élő skill-patch — csak két rövid, triviális Telegram-váltás (Proxmox link) történt, abból nem jött új mintázat. Ezen felül nincs újabb, éjszakai javaslat.
 
 ## 🧹 Memória-egészség
-1442/1442 vektorizált (1 hiányzót pótoltam backfill-lel). 6 antikvált hot memória (7+ napos, #410 token-usage cross-attribution témakör lezárt/archív állapotai + WD MyCloud + #411 pending-döntés jegyzet) cold-tier-be mozgatva. 2 pontos duplikátum-pár (`Mai megbeszeles eredmenye`, `Szeretem a kavét`, régi teszt-adat) már cold-ban van, nem kellett mozgatni.
+1459/1459 vektorizált (nem volt hiányzó). 4 antikvált hot memória (7+ napos, mind a ledger-live-drain/heartbeat-repeat-cadence-check ismétlődő skip-skill jegyzetei 09-04/09-05-ről) cold-tier-be mozgatva. 2 pontos duplikátum-pár (`Mai megbeszeles eredmenye`, `Szeretem a kavét`, régi 06-09-i teszt-adat) már cold-ban van, nem kellett mozgatni.
 
 ## 🎯 Top-3 holnapi javaslat
-1. HomeLab: #380 (USB lemez auto-mount) — a mechanizmus élesben telepítve és igazolva, de a valódi reboot-teszt még hátravan, csak egy Surface reboot-ablakra vár Jocootól.
-2. Personal: #415 (CV frissítés) — Chicha challenge tegnap (09-10) elkészült, 2 nyitott kérdés vár Jocoo válaszára (AI Guardrails illesztése a Voluntary AI Safety Standardhoz, ki/mi értékelte a Level 3 maturityt).
-3. HomeLab: #351 (Home-server 4/4: Kodi + képernyő-kikapcsolás + sztereó hang verifikáció) — a sorozat utolsó tétele, nincs külső blokkoló, csak még nem indult el.
+1. Scouts: #142/#143 (kulcs átvétele a tárolóhoz + leltár felvétele) — a 40. évfordulós Open Day szeptember 19-én van, 6 nap múlva, és ez a két Jocoo-ra bízott QM-feladat még el sem indult.
+2. Personal: #415 (CV frissítés) — Chicha challenge kész, 2 nyitott kérdés vár Jocoo válaszára (AI Guardrails illesztése a Voluntary AI Safety Standardhoz, ki/mi értékelte a Level 3 maturityt); a TMB redundancy miatt időkritikus.
+3. HomeLab: #380 (USB lemez auto-mount) — a mechanizmus élesben telepítve és igazolva (Kronk, 08-28), csak a valódi reboot-teszt van hátra, egy Surface reboot-ablakra vár Jocootól.
 
-(Financials #276/#252 Looker-téma továbbra is Jocoo által parkolva 2026-08-05 óta, komment-ellenőrzéssel kizárva a top-3-ból. Hame Remote #346 szintén parkolva 2026-08-14 óta, Jocoo jelzésére vár.)
+(Financials #276/#252 Looker-téma továbbra is Jocoo által parkolva 2026-08-05 óta, komment-ellenőrzéssel újra kizárva a top-3-ból.)
 
 ## 🌐 External opportunity
-Skip — heti limit nincs letelve (utolsó futás 6 napja, 7 nap kell).
+[alirezarezvani/claude-skills](https://github.com/alirezarezvani/claude-skills) — 380+ Claude Code skill/plugin gyűjtemény kifejezetten marketing, business ops és commercial/finance kategóriákkal (5200+ csillag, aktív release-ekkel); közvetlenül releváns Chicha marketing-munkájához és a Financials-flotta üzleti-oldalához.
 
 ## 🛠 Skill-flotta health
-Ez a 7. egymást követő éjszaka hogy a lista változatlan: ugyanaz a 29 nem-pinned, 30+ napos mtime-jelölt skill 0 skill_usage-találattal (pl. `kanban-to-trello-migration`, `portainer-password-reset`, `pdf-page-rotate`, `google-sheet-from-table`, `youtube-video-fleet-analyze`, `retrospective`, `skill-management`). A múlt éjjel felvetett döntés-kérésre még nem érkezett válasz Jocootól — nem ismétlem a teljes listát, csak jelzem hogy még nyitott.
+8. egymást követő éjszaka hogy a lista változatlan: ugyanaz a 29 nem-pinned, 30+ napos mtime-jelölt skill 0 skill_usage-találattal. A korábban felvetett döntés-kérésre (törlés vagy frissítés) még nem érkezett válasz Jocootól — nem ismétlem a teljes listát, csak jelzem hogy még nyitott.
 
-*Marveen, 02:09 — most már alszom én is.*
+*Marveen, 02:10 — most már alszom én is.*
