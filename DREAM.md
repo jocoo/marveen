@@ -1,23 +1,20 @@
-# 💭 Dream Engine — 2026-09-24 02:09
+# 💭 Dream Engine — 2026-09-25 02:07
 
 ## 💡 Skill-javaslatok
-Nincs új javaslat. Az elmúlt 24 óra szinte teljes egésze a TMB FWC ügyön (#423) ment (Chicha pénzügyi modell v1.1→v1.3, Cuzcoo szerződés/payslip-elemzés), ez a `tmb-redundancy-legal-advisory` skill hatókörét követte 1:1, nem hozott elő új, skillbe illő mintát. Két skip-skill bejegyzés is megerősíti: sem a mai Dream Engine előd-futás, sem a 08:00-as kanban-audit nem talált patch-igényt.
+Ma élő skill-patch nem történt sehol a flottában (Kronk/Yzma/Chicha/Mata nem hagyott hot/warm emléket az elmúlt 24h-ban). Cuzcoo két önreflexiót futtatott és mindkettőnél tudatosan a "nem patchelek" döntést hozta: (1) a dream-engine git-merge hiba (uncommitted DREAM.md a fő checkoutban) ma éjjel HARMADSZOR fordult elő (09-01, 09-23, 09-24) — a skill már tartalmazza a mechanikus fixet (`git checkout -- DREAM.md` kötelező, sorszámozott lépésként közvetlenül a Write után), ma erre külön figyeltem; (2) a ledger-live-drain heartbeat ismétlődő tüzelése (2 percenként, üres kimenet) megerősítve normál cron-viselkedés, nem hiba. Új mintázat vagy javaslat nincs.
 
 ## 🧹 Memória-egészség
-1549/1549 vektorizált (1 hiányzó pótolva backfill-lel). 2 antikvált hot memória (id 1597, 1599, 2026-09-16-i, 7+ napja nem hivatkozott) cold-tierbe mozgatva. Talált duplikátum-content (2×4 sor, "Mai megbeszeles eredmenye" / "Szeretem a kavét") — ezek már korábban is cold-tierben voltak, régi (06-08) teszt-adatok, nincs teendő.
+1558/1558 vektorizált (1 hiányzó pótolva backfill-lel). 2 antikvált hot memória cold-tierbe mozgatva (#1600 — 2026-09-15/16/17-i Dream Engine kimaradás jegyzet, rég túlhaladva; #1610 — Seek BA jelentkezés #421 09-17-i státusza, a kártya azóta stagnál, ld. Bucket 3). Talált duplikátum: 2 tartalom (4-4 példányban) — már mind cold-tierben, kinézetre teszt-adat ("Szeretem a kavét", "Mai megbeszeles eredmenye"), nincs további teendő.
 
 ## 🎯 Top-3 holnapi javaslat
-1. TMB (#423): folytatni a Kurt Calma-email időzítés kérdésének lezárását — az F2 beadási határidő (2026-10-08) közeledik, a pénzügyi modell most stabil (v1.3, primer dokumentumokra épülő).
-2. Scouts (#142): a raktár-kulcs átvétele — ez blokkolja a másik három magas prioritású QM-kártyát (#143 leltár, #144 javaslat), egyetlen apró lépés old fel egy egész láncot.
-3. Marveen_Env (#397): `/api/messages` PUT válasz néma 500-karakteres csonkolása mondathatár nélkül — apró, de csendes adatvesztés-kockázat inter-agent üzeneteknél, érdemes lenne előre venni mielőtt tényleges információ vész el vele.
+1. TMB #423 (FWC unfair dismissal): a javított végső payslip megérkezésekor sorról sorra nézd át az LSL-visszaállítást (19 nap, ~12 350 AUD), az annual leave és redundancy tételeket a mai Chicha-elemzés checklistje alapján — ez a legaktívabb, legmagasabb tétű nyitott szál.
+2. HomeLab #380 (USB lemez csendes lecsatlakozás): 2+ hete waiting, Kronk watchdogja naponta FAIL-t jelez, fizikai kábel/port-ellenőrzésre vár Jocoo-tól — nem sürgős, de a leghosszabb ideje parkoló magas prioritású tétel.
+3. Scouts #142 (raktárkulcs átvétele): magas prioritású, planned, több mint egy hónapja mozdulatlan — gyors, alacsony erőfeszítésű tétel, amit a TMB-ügy nyomott háttérbe.
 
 ## 🌐 External opportunity
-Skip — heti limit nem telt le (utolsó futás 2 napja).
+Skip — heti limit még nem telt le (utolsó futás ~3 napja).
 
 ## 🛠 Skill-flotta health
-15. alkalommal folytatódik a nem-pinned, 0 skill_usage-találatos (30 nap) jelöltlista döntés-kérése — ma a valódi DB-lekérdezés 71 jelöltet ad (tegnap 63 volt, feltehetően újabb skillek léptek át a 30 napos határon). A törlés/frissítés döntés 14+ éjszaka óta válasz nélkül áll — érdemes kézzel eldönteni, nem sorolom fel újra a teljes listát.
-
-## ⚠️ Hibák
-Nincs.
+16. alkalommal folytatódik a nem-pinned, 30+ napos, 0-skill_usage jelöltek döntés-kérése — de ma egy valódi (nem becsült) halmaz-differencia lekérdezéssel csak 37 jelöltet találtam, szemben a tegnapi 71-gyel. A számok korábbi éjszakák közti nagy ingása (31→63→71→37) arra utal hogy vagy a korábbi, vagy a mai számolási módszer hibás lehetett — érdemes egyszer manuálisan összevetni, ne csak folytatni a sorozatot vakon. A döntés maga (törlés vagy frissítés a tartósan 0-használatú skilleken) továbbra is 15+ éjszaka óta válasz nélkül áll.
 
 *Marveen, 02:09 -- most már alszom én is.*
