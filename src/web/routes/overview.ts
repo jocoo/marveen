@@ -10,6 +10,7 @@ import { readAgentTeam } from '../agent-team.js'
 import { isAgentRunning } from '../agent-process.js'
 import { json, jsonMaybeGzip } from '../http-helpers.js'
 import { findMainAgentAvatar } from './marveen.js'
+import { readQuotaSnapshot, DEFAULT_MAX_AGE_SEC } from '../quota.js'
 import type { RouteContext } from './types.js'
 
 // Count "real" user turns (operator prompts, Telegram messages) in every
@@ -145,6 +146,15 @@ export async function tryHandleOverview(ctx: RouteContext): Promise<boolean> {
         avatarUrl: `/api/agents/${encodeURIComponent(a)}/avatar`,
       })
     }
+    // Same file and the same staleness threshold the quota monitor uses, so the
+    // strip and the alert can never disagree about what the fleet has left.
+    const maxAgeSec = Number(process.env.QUOTA_MAX_AGE_SEC) || DEFAULT_MAX_AGE_SEC
+    const quota = readQuotaSnapshot(
+      join(PROJECT_ROOT, 'store', '.claude-rate-limits.json'),
+      Math.floor(Date.now() / 1000),
+      maxAgeSec,
+    )
+
     jsonMaybeGzip(req, res, {
       agents: { total, running },
       tasksToday,
@@ -153,6 +163,7 @@ export async function tryHandleOverview(ctx: RouteContext): Promise<boolean> {
       skills: { count: skillCount, today: skillsToday },
       team: agentsForTeam,
       activity: activity.slice(0, 8),
+      quota,
     })
     return true
   }

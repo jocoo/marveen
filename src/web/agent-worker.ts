@@ -1,3 +1,4 @@
+import { tmuxStderr } from './tmux-stderr.js'
 import { execFileSync } from 'node:child_process'
 import { existsSync, mkdirSync, rmSync, readFileSync, writeFileSync, readdirSync, lstatSync, symlinkSync, realpathSync } from 'node:fs'
 import { join } from 'node:path'
@@ -597,7 +598,7 @@ function alertWorkerStuck(ctx: WorkerCtx, paneTail: string): void {
   if (Date.now() - ctx.lastStuckAlert < WORKER_STUCK_ALERT_COOLDOWN_MS) return
   ctx.lastStuckAlert = Date.now()
   void notifyChannel(
-    `⚠️ Marveen worker [${ctx.session}]: a hatter-worker session nem all keszen (beragadt dialogus vagy ismeretlen kepernyo). Onjavitas lefutott (Escape + restart), de a keszenlet nem allt helyre. Erintett: agens-generalas, capability-osszefoglalo, heartbeat, digest. Nezz ra: tmux attach -t ${ctx.session}`,
+    `⚠️ Marveen worker [${ctx.session}]: a háttér-worker session nem áll készen (beragadt dialógus vagy ismeretlen képernyő). Önjavítás lefutott (Escape + restart), de a készenlét nem állt helyre. Érintett: ágens-generálás, capability-összefoglaló, heartbeat, digest. Nézz rá: tmux attach -t ${ctx.session}`,
   ).catch(() => { /* notifyChannel logs internally */ })
 }
 
@@ -634,7 +635,9 @@ function restartWorkerSession(ctx: WorkerCtx): void {
     logger.warn({ session: ctx.session }, 'agent-worker: WEB_ONLY mode -- refusing to restart (kill) a worker session')
     return
   }
-  try { execFileSync(TMUX, ['kill-session', '-t', ctx.session], { timeout: 5000 }) } catch { /* not running */ }
+  // TMUXWINDOWATTR920: stderr piped; "not running" is the expected case here,
+  // so it is logged at debug with the site instead of copied onto stderr.
+  try { execFileSync(TMUX, ['kill-session', '-t', ctx.session], { timeout: 5000, stdio: ['ignore', 'pipe', 'pipe'] }) } catch (err) { logger.debug({ site: 'agent-worker.restart', session: ctx.session, tmux: tmuxStderr(err) }, 'tmux kill-session: not running') }
   try { startWorkerSessionFor(ctx) } catch (err) { logger.warn({ err, session: ctx.session }, 'agent-worker: restart failed') }
 }
 

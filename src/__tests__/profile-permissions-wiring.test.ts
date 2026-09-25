@@ -31,6 +31,8 @@ describe('buildResolvedPermissions', () => {
     expect(out.deny).toEqual([])
   })
 
+  // File rules come out '//'-prefixed: a single leading '/' is project-relative
+  // in Claude Code rules (upstream TMPLPERM908).
   it('resolves ${AGENT_DIR} and ${HOME} placeholders in both allow and deny', () => {
     const profile: ProfileTemplate = {
       id: 'test',
@@ -43,9 +45,9 @@ describe('buildResolvedPermissions', () => {
       },
     }
     const out = buildResolvedPermissions(profile, CTX, false)
-    expect(out.allow).toContain('Read(/srv/app/agents/nina/**)')
-    expect(out.allow).toContain('Write(/home/testuser/Downloads/**)')
-    expect(out.deny).toContain('Read(/home/testuser/.ssh/**)')
+    expect(out.allow).toContain('Read(//srv/app/agents/nina/**)')
+    expect(out.allow).toContain('Write(//home/testuser/Downloads/**)')
+    expect(out.deny).toContain('Read(//home/testuser/.ssh/**)')
   })
 
   it('appends self-pace tool-name deny when the governance flag is on', () => {

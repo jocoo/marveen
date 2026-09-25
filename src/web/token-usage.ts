@@ -19,6 +19,18 @@ function encodeProjectPath(p: string): string {
   return p.replace(/[^a-zA-Z0-9-]/g, '-')
 }
 
+// True when `dir` is the shared ~/.claude/projects wearing another name,
+// reached through a symlink. Compared by realpath, so a symlinked parent
+// counts too. A missing path is not the shared root. `sharedRoot` is a
+// parameter only so the test can point both sides at a fixture.
+export function resolvesToSharedProjectsRoot(dir: string, sharedRoot: string = PROJECTS_DIR): boolean {
+  try {
+    return realpathSync(dir) === realpathSync(sharedRoot)
+  } catch {
+    return false
+  }
+}
+
 interface AgentTranscriptSource {
   agent: string
   projectDir: string
@@ -68,38 +80,31 @@ export function discoverAgentSources(projectRootOverride?: string): AgentTranscr
   // deliberate, so the two readers cannot drift apart again.
   //
   // Both roots are kept for a migrated agent, not swapped: the pre-migration
-  // history is real and lives only in the shared root. Re-reading the SAME
-  // file under one agent is harmless -- the UNIQUE INDEX on (agent,
-  // session_id, timestamp, input, output) plus INSERT OR IGNORE absorbs it.
-  // Reading it under a SECOND agent is not, because `agent` is in that key.
-  //
-  // The ownership assumption below ("this dir holds only this agent's work")
-  // holds ONLY while the isolated root is a real, private directory. It is not
-  // always one: the fleet's provisioning links agents/<name>/.claude-config/
-  // projects -> ~/.claude/projects (measured 2026-09-03 on chaca, chicha,
-  // kronk, mata, tipo, yzma -- six symlinks, all to the shared root). Read
-  // through such a link, this loop enumerates EVERY project dir in the shared
-  // root and stamps all of them with one agent's name, so a single session was
-  // written to token_usage once per symlinked agent: 93 sessions carried 7
-  // agents each, 117 carried 6, and /api/token-usage/summary handed the
-  // morning briefing near-identical totals for the whole fleet (only the main
-  // agent, which has no isolated dir, differed). The UNIQUE INDEX cannot
-  // absorb this -- `agent` is part of the key, so each copy is a distinct row.
-  //
-  // So: an isolated root is trusted only where it is genuinely separate from
-  // the shared root, and a real project dir is claimed by at most one source.
-  // Loop 1 already attributes the shared root correctly, by encoded dir name.
-  const claimed = new Set<string>()
-  for (const s of sources) claimed.add(realPathOr(s.projectDir))
-  const sharedRoot = realPathOr(PROJECTS_DIR)
+  // history is real and lives only in the shared root. Duplicate rows are
+  // impossible anyway -- the UNIQUE INDEX on (agent, session_id, timestamp,
+  // input, output) plus INSERT OR IGNORE absorbs any overlap.
   for (const name of listAgentNames()) {
     let configDir: string | null = null
     try { configDir = resolveAgentConfigDirForRead(name, projectRootOverride) } catch { continue }
     if (!configDir) continue
     const isolatedProjects = join(configDir, 'projects')
     if (!existsSync(isolatedProjects)) continue
-    // A link (or bind mount) back onto the shared root is not an isolated dir.
-    if (realPathOr(isolatedProjects) === sharedRoot) continue
+    // ...unless the agent was never actually migrated, in which case
+    // agents/<name>/.claude-config/projects is a SYMLINK back to the shared
+    // ~/.claude/projects. Then the comment below is false: the dir holds
+    // EVERY agent's work, and all of it gets booked under this one name.
+    //
+    // MEASURED 2026-09-04 18:40 on a live install: three sub-agents each
+    // reported the whole fleet's consumption, byte-identical down to the
+    // field (43844 calls, 28.5M output, 8.82G cache-read, 636 sessions),
+    // because all three symlinks resolve to the same root; only the main
+    // agent's row was real. 73% of the table was duplicate.
+    // The cursor table cannot absorb it either, being keyed by file path, and
+    // the same transcript reached the parser under three different paths.
+    //
+    // Skipping it loses nothing: the shared root is walked in the loop above,
+    // where attribution comes from the encoded directory name.
+    if (resolvesToSharedProjectsRoot(isolatedProjects)) continue
     let entries: string[]
     try { entries = readdirSync(isolatedProjects) } catch { continue }
     for (const entry of entries) {
@@ -109,22 +114,12 @@ export function discoverAgentSources(projectRootOverride?: string): AgentTranscr
       if (!stat.isDirectory()) continue
       // Attribution comes from WHOSE config dir this is, not from the encoded
       // project name: an agent's isolated dir holds only that agent's work.
-      // Per-directory guard for the same reason as the root guard above: a
-      // single real directory reached through two agents' config dirs would
-      // otherwise be counted for both.
-      const real = realPathOr(full)
-      if (claimed.has(real)) continue
-      claimed.add(real)
+      if (sources.some((s) => s.agent === name && s.projectDir === full)) continue
       sources.push({ agent: name, projectDir: full })
     }
   }
 
   return sources
-}
-
-/** realpath, falling back to the given path when it cannot be resolved. */
-function realPathOr(p: string): string {
-  try { return realpathSync(p) } catch { return p }
 }
 
 function findJsonlFiles(dir: string): string[] {
@@ -577,11 +572,19 @@ export function correlateWithKanban(): void {
   `).all() as { agent: string; minTs: number; maxTs: number }[]
 
   for (const row of uncorrelated) {
+    // PARENT CARDS ARE NOT WORK ITEMS HERE. This correlation reads updated_at as "the agent was
+    // working on this card at that moment" and uses consecutive timestamps as window boundaries.
+    // Since a subcard write now also stamps its ancestors (db.ts, touchAncestorChain), a parent
+    // carries the SAME timestamp as the child that caused it -- and with a tie, which title won
+    // the token rows came down to row order, not to what was worked on. Parents are skipped so the
+    // leaf card keeps the attribution; a parent's own timestamp can no longer tell us whether it
+    // was written or merely bubbled, and separating those would take a column we are not adding.
     const cards = db.prepare(`
       SELECT id, title, project, assignee, updated_at
       FROM kanban_cards
       WHERE (assignee = ? OR assignee LIKE '%' || ? || '%')
         AND updated_at BETWEEN ? AND ?
+        AND NOT EXISTS (SELECT 1 FROM kanban_cards child WHERE child.parent_id = kanban_cards.id)
       ORDER BY updated_at ASC
     `).all(row.agent, row.agent, row.minTs, row.maxTs) as any[]
 

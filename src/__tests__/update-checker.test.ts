@@ -52,6 +52,9 @@ function buildIO(over: StubOverrides = {}): { io: UpdateCheckerIO; state: StubSt
       state.upstreamMergeBaseCalls++
       return over.mergeBase ?? ''
     },
+    async branchOnRemote() {
+      return 'develop'
+    },
     countCommitsAhead(base) {
       state.countCommitsAheadCalls.push(base)
       return over.countAhead ? over.countAhead(base) : 0
