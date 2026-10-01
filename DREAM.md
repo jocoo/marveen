@@ -1,20 +1,20 @@
-# 💭 Dream Engine — 2026-10-01 02:07
+# 💭 Dream Engine — 2026-10-02 02:07
 
 ## 💡 Skill-javaslatok
-Ma élőben történt skill-patch: Chicha a `job-application-tailoring` skillt patchelte (EOI-formátum, átöröklött téves szerep-túlállítás kiszűrése) a First Grade EOI + Barwon Water jelentkezések közben. Ezen felül nincs újabb, éjszakai javaslat — nem került elő 3+ szor visszatérő, skillbe nem foglalt manuális művelet a memories/daily_logs átnézésekor (Kronk/Yzma/Mata ma nem hagyott hot/warm emléket).
+Nincs új javaslat. Az elmúlt 24 órában (cuzcoo, kronk — más ágens nem hagyott hot/warm emléket vagy napi naplót) kizárólag rutin heartbeat-körök futottak (dream-engine, fleet-db-daily-backup, reggeli-napindító), mindegyik skip-skill minősítéssel zárult: a már meglévő SKILL.md-k szó szerint lefedték a folyamatot, élő skill-patch vagy -létrehozás nem történt sehol.
 
 ## 🧹 Memória-egészség
-1591/1591 vektorizált (100%, nincs pótolandó). 6 antikvált hot memória (>7 napos, nem hivatkozott) cold-tierbe mozgatva — mind korábbi éjszakai "skip-skill" heartbeat-jegyzet (dream-engine 09-18, kanban-audit 4×, dream-engine git-merge eset), ma már nem aktívak. Duplikátum: ugyanaz a 2 tartalom (4-4 példányban, "Szeretem a kavét" / "Mai megbeszeles eredmenye") — már mind cold-tierben, régi teszt-adat, nincs további teendő.
+1600/1600 vektorizált (100%, nincs pótolandó). 5 antikvált hot memória (TMB redundancy-szál részletei: M&B SMS-draft, payrise-számítás, Kurt Calma chase-email és a végső kifizetés utóélete — mind utoljára 09-24-én hozzáférve, 8+ napja nem frissültek, a project-szintű állapotot a warm `project-tmb-redundancy-2026` emlék már külön tartja) cold-tierbe mozgatva. Duplikátum: a már ismert 2× 4 példányos teszt-adat ("Szeretem a kávét" / "Mai megbeszélés eredménye") továbbra is cold-tierben, nincs további teendő.
 
 ## 🎯 Top-3 holnapi javaslat
-1. TMB #423 (FWC unfair dismissal): a végső payslip-ellenőrzés és a Govender-precedens kutatása lezárva, F2 határidő okt. 8 — a beadvány végső összeállítása/benyújtása a következő lépés, ez a legaktívabb és legmagasabb tétű nyitott szál.
-2. Personal #428 (Barwon Water Agile Delivery Lead cover letter): kész draft várja Jocoo döntését 2 nyitott kérdésben (Geelong-i helyszín/költözés-vállalás, resume-backfill jóváhagyása) — blokkoló, amíg Jocoo nem válaszol, a levél nem küldhető.
-3. HomeLab #380 (USB lemez csendes lecsatlakozás): magas prioritású, a Surface-hoston futó watchdog folyamatosan FAIL-t/offline-t logol (legutóbb okt. 1 12:01 UTC-környékén is), fizikai kábel/port-ellenőrzésre vár Jocoo-tól.
+1. TMB #423 (FWC unfair dismissal): payslip-ellenőrzés és Govender-precedens kutatása kész, F2 határidő okt. 8 — a beadvány végső összeállítása/benyújtása a következő lépés, ez a legmagasabb tétű és egyetlen aktívan haladó szál.
+2. Personal #428 (Barwon Water Agile Delivery Lead cover letter): kész draft vár Jocoo döntésére 2 nyitott kérdésben (Geelong-i helyszín/költözés-vállalás, resume-backfill jóváhagyása) — a levél eddig emiatt nem ment ki.
+3. HomeLab #380 (USB lemez csendes lecsatlakozás): magas prioritású, a watchdog ma (okt. 1, 12:00-s kanban-audit log) is FAIL-t jelzett ugyanarra a diszk-UUID-ra — fizikai kábel/port-ellenőrzésre vár.
 
 ## 🌐 External opportunity
-[nwiizo/ccswarm](https://github.com/nwiizo/ccswarm) — Rust-alapú multi-agent orchestration Claude Code-hoz, Git worktree-izolációval és szakosított agentekkel (153 csillag, utolsó push 09-14, GitHub API-val ellenőrizve); a Marveen flotta már használ worktree-alapú izolációt (pl. a DREAM.md commit-folyam), ez a repó direktben a fejlesztő-flotta menedzsment témába illik.
+Skip — a heti limit még nem telt le (utolsó ajánlás tegnap, 2026-10-01 02:09-kor; a markerfájl szerint ~1 nap telt el a 7 napos ciklusból).
 
 ## 🛠 Skill-flotta health
-A nem-pinned, 30+ napos, 0-skill_usage jelöltek száma ma valódi (mtime + skill_usage kereszt-ellenőrzött) lekérdezéssel 44 — ismét más szám, mint a tegnapi (09-25) 37 vagy a korábbi éjszakák 31/63/71-e. Ez már többedjére (16+ éjszaka, a 09-25 és mai futás között 6 nap kimaradt) megerősíti hogy a puszta ismétlő-jelzés helyett Jocoo-nak kézzel kellene eldöntenie: törlés vagy frissítés a tartósan 0-használatú skilleken. A lista maga (44 skillnév) a `/tmp/claude-1000/-home-jocoo-marveen/*/scratchpad/dream-zero-usage.txt`-ből nem publikus útvonal, ha Jocoo kéri a teljes listát, újra lefuttatható.
+Nem-pinned, 30+ napos skill-jelölt 89 db. Ebből az elmúlt 30 napban ténylegesen NEM használt (skill_usage tábla, nem csak fájl-mtime) 73, és **soha, egyetlen session-ben sem hívott** 44 — ugyanaz a szám mint tegnap, ezúttal valódi skill_usage-kereszthivatkozással (tegnapi "instabil számolás" megjegyzés a mtime-only becslésre vonatkozott, nem erre a módszerre). A lista tartósan 16+ éjszakája ismétlődik érdemi Jocoo-döntés nélkül: törlés vagy frissítés a 44 soha-nem-használt skillen. Ha kell a teljes 44-es lista, újra lefuttatható és Telegramon kiküldhető.
 
-*Marveen, 02:14 -- most már alszom én is.*
+*Marveen, 02:21 -- most már alszom én is.*
