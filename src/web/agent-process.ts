@@ -1035,6 +1035,17 @@ function provisionIsolatedConfigDir(
     // Seed installed_plugins.json with every project-scoped install re-pointed at
     // THIS agent's cwd, so the channel plugin is registered for this project from
     // first launch (Claude Code keeps maintaining it thereafter).
+    //
+    // The stamp is the RESOLVED cwd: Claude Code matches a project-scoped install
+    // against the realpath of its working dir. With agents/ relocated behind a
+    // symlink (marveen/agents -> agent-works/agents), a symlink-path stamp matched
+    // nothing, so every launch came up WITHOUT the channel plugin (no bun poller,
+    // deaf bot) and Claude Code re-installed it for the realpath ~1s after startup
+    // -- too late for that session, and wiped again by this seed on the next
+    // launch. Measured 2026-10-03 (Chicha, TGREALPATH1003): symlink stamp ->
+    // plugin never started; realpath stamp -> plugin started.
+    let projectKey = cwd
+    try { projectKey = realpathSync(cwd) } catch { /* dir may not resolve yet */ }
     const sharedInstalled = join(sharedPlugins, 'installed_plugins.json')
     if (existsSync(sharedInstalled)) {
       try {
@@ -1043,7 +1054,7 @@ function provisionIsolatedConfigDir(
         }
         for (const entries of Object.values(inst.plugins ?? {})) {
           for (const e of entries) {
-            if (e.scope === 'project') e.projectPath = cwd
+            if (e.scope === 'project') e.projectPath = projectKey
           }
         }
         writeFileSync(join(pluginsDir, 'installed_plugins.json'), JSON.stringify(inst, null, 2) + '\n')

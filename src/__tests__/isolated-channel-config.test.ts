@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import {
   mkdtempSync, mkdirSync, writeFileSync, rmSync, lstatSync, readlinkSync, readFileSync, existsSync,
+  symlinkSync, realpathSync,
 } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
@@ -121,7 +122,18 @@ describe('ensureIsolatedChannelConfigDir', () => {
     const ip = join(cfg, 'plugins', 'installed_plugins.json')
     expect(lstatSync(ip).isSymbolicLink()).toBe(false)
     const inst = JSON.parse(readFileSync(ip, 'utf-8'))
-    expect(inst.plugins[TG][0].projectPath).toBe(join(SANDBOX, 'agents', 'testagent'))
+    expect(inst.plugins[TG][0].projectPath).toBe(realpathSync(join(SANDBOX, 'agents', 'testagent')))
+  })
+
+  it('stamps the RESOLVED cwd when the agents dir sits behind a symlink (TGREALPATH1003)', () => {
+    // Claude Code matches a project-scoped install against the realpath of its
+    // cwd; a symlink-path stamp left the channel plugin unloaded on every launch.
+    rmSync(join(SANDBOX, 'agents'), { recursive: true, force: true })
+    mkdirSync(join(SANDBOX, 'relocated', 'testagent'), { recursive: true })
+    symlinkSync(join(SANDBOX, 'relocated'), join(SANDBOX, 'agents'))
+    const cfg = ensureIsolatedChannelConfigDir('testagent', 'telegram')!
+    const inst = JSON.parse(readFileSync(join(cfg, 'plugins', 'installed_plugins.json'), 'utf-8'))
+    expect(inst.plugins[TG][0].projectPath).toBe(realpathSync(join(SANDBOX, 'relocated', 'testagent')))
   })
 
   it('a CHANNEL-LESS agent (null provider) disables EVERY channel plugin', () => {
